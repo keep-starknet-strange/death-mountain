@@ -1,0 +1,41 @@
+[world]
+name = "Provable Games"
+description = "DNC"
+seed = "pg-slot-10"
+
+[env]
+rpc_url = "https://api.cartridge.gg/x/pg-slot-4/katana"
+# Default account for katana with seed = 0
+world_address = "0x344e910f93abecadf09691825a3b59fb177f9f8762c07a0947c3e9dc25fd8db"
+
+[namespace]
+default = "ls_0_0_6"
+
+[writers]
+"ls_0_0_6" = [
+    "ls_0_0_6-game_systems",
+    "ls_0_0_6-game_token_systems",
+    "ls_0_0_6-settings_systems",
+    "ls_0_0_6-beast_systems",
+    "ls_0_0_6-adventurer_systems",
+    "ls_0_0_6-objectives_systems"
+]
+
+[migration]
+order_inits = [
+    "ls_0_0_6-game_systems",
+    "ls_0_0_6-loot_systems",
+    "ls_0_0_6-renderer_systems",
+    "ls_0_0_6-adventurer_systems",
+    "ls_0_0_6-beast_systems",
+    "ls_0_0_6-game_token_systems", 
+    "ls_0_0_6-settings_systems", 
+    "ls_0_0_6-objectives_systems"
+]
+
+[init_call_args]
+"ls_0_0_6-game_token_systems" = [
+    "0x127fd5f1fe78a71f8bcd1fec63e3fe2f0486b6ecd5c86a0466c3a21fa5cfcec",
+    "0x01d3950941c7cbb80160d2fd3f112bb9885244833e547b298dfed040ce1e140f", # denshokan_address
+    "1" # Option::None for renderer address
+]

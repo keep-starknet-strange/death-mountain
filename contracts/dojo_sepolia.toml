@@ -1,0 +1,40 @@
+[world]
+name = "Provable Games"
+description = "DNC"
+seed = "DNC"
+
+[env]
+rpc_url = "https://api.cartridge.gg/x/starknet/sepolia/rpc/v0_8"
+world_address = "0x785401cf74071ec444e37dbbd87281aba48afc86570b1a1537193d1ce39086f"
+
+[namespace]
+default = "ls_0_0_9"
+
+[writers]
+"ls_0_0_9" = [
+    "ls_0_0_9-game_systems", 
+    "ls_0_0_9-game_token_systems", 
+    "ls_0_0_9-settings_systems",
+    "ls_0_0_9-beast_systems",
+    "ls_0_0_9-adventurer_systems",
+    "ls_0_0_9-objectives_systems"
+]
+
+[migration]
+order_inits = [
+    "ls_0_0_9-game_systems",
+    "ls_0_0_9-loot_systems",
+    "ls_0_0_9-renderer_systems",
+    "ls_0_0_9-adventurer_systems",
+    "ls_0_0_9-beast_systems",
+    "ls_0_0_9-game_token_systems", 
+    "ls_0_0_9-settings_systems", 
+    "ls_0_0_9-objectives_systems"
+]
+
+[init_call_args]
+"ls_0_0_9-game_token_systems" = [
+    "0x065d2AB17338b5AffdEbAF95E2D79834B5f30Bac596fF55563c62C3c98700150", # account address
+    "0x02334dc9c950c74c3228e2a343d495ae36f0b4edf06767a679569e9f9de08776", # denshokan address
+    "1" # Option::None for renderer address
+]

@@ -1,0 +1,1092 @@
+import AnimatedText from '@/desktop/components/AnimatedText';
+import { useGameDirector } from '@/desktop/contexts/GameDirector';
+import { useResponsiveScale } from '@/desktop/hooks/useResponsiveScale';
+import { useGameStore } from '@/stores/gameStore';
+import { useCombatSimulation } from '@/hooks/useCombatSimulation';
+import { ability_based_percentage, calculateLevel, getNewItemsEquipped } from '@/utils/game';
+import { potionPrice } from '@/utils/market';
+import { Box, Button, Checkbox, Typography } from '@mui/material';
+import { keyframes } from '@emotion/react';
+import { useEffect, useMemo, useState } from 'react';
+import Adventurer from './Adventurer';
+import Beast from './Beast';
+import InventoryOverlay from './Inventory';
+import { JACKPOT_BEASTS, GOLD_MULTIPLIER, GOLD_REWARD_DIVISOR, MINIMUM_XP_REWARD } from '@/constants/beast';
+import { useDynamicConnector } from '@/contexts/starknet';
+import { suggestBestCombatGear } from '@/utils/gearSuggestion';
+
+const attackMessage = "Attacking";
+const fleeMessage = "Attempting to flee";
+const equipMessage = "Equipping items";
+
+const tipPulseFight = keyframes`
+  0% {
+    box-shadow: 0 0 6px rgba(132, 196, 148, 0.35), 0 0 0 rgba(132, 196, 148, 0.0);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(132, 196, 148, 0.65), 0 0 22px rgba(132, 196, 148, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 6px rgba(132, 196, 148, 0.35), 0 0 0 rgba(132, 196, 148, 0.0);
+  }
+`;
+
+const tipPulseFlee = keyframes`
+  0% {
+    box-shadow: 0 0 6px rgba(214, 120, 118, 0.35), 0 0 0 rgba(214, 120, 118, 0.0);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(214, 120, 118, 0.7), 0 0 20px rgba(214, 120, 118, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 6px rgba(214, 120, 118, 0.35), 0 0 0 rgba(214, 120, 118, 0.0);
+  }
+`;
+
+const tipPulseGamble = keyframes`
+  0% {
+    box-shadow: 0 0 6px rgba(208, 180, 120, 0.3), 0 0 0 rgba(208, 180, 120, 0.0);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(208, 180, 120, 0.6), 0 0 18px rgba(208, 180, 120, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 6px rgba(208, 180, 120, 0.3), 0 0 0 rgba(208, 180, 120, 0.0);
+  }
+`;
+
+export default function CombatOverlay() {
+  const { executeGameAction, actionFailed, setSkipCombat, skipCombat, showSkipCombat } = useGameDirector();
+  const { currentNetworkConfig } = useDynamicConnector();
+  const { scalePx, contentOffset } = useResponsiveScale();
+  const {
+    gameId,
+    adventurer,
+    adventurerState,
+    beast,
+    battleEvent,
+    bag,
+    undoEquipment,
+    applyGearSuggestion,
+    spectating,
+  } = useGameStore();
+
+  const [untilDeath, setUntilDeath] = useState(false);
+  const [untilLastHit, setUntilLastHit] = useState(false);
+  const [autoLastHitActive, setAutoLastHitActive] = useState(false);
+  const [lastHitActionCount, setLastHitActionCount] = useState<number | null>(null);
+  const [attackInProgress, setAttackInProgress] = useState(false);
+  const [fleeInProgress, setFleeInProgress] = useState(false);
+  const [equipInProgress, setEquipInProgress] = useState(false);
+  const [suggestInProgress, setSuggestInProgress] = useState(false);
+  const [combatLog, setCombatLog] = useState("");
+
+  // Determine if new items are equipped (beast attacks first)
+  const hasNewItemsEquipped = useMemo(() => {
+    if (!adventurer?.equipment || !adventurerState?.equipment) return false;
+    return getNewItemsEquipped(adventurer.equipment, adventurerState.equipment).length > 0;
+  }, [adventurer?.equipment, adventurerState?.equipment]);
+
+  // Use optimized combat simulation hook with debouncing and state hashing
+  const { simulationResult, combatStats, simulationActionCount } = useCombatSimulation(
+    adventurer ?? null,
+    beast ?? null,
+    bag,
+    { debounceMs: 150, initialBeastStrike: hasNewItemsEquipped }
+  );
+
+  const fleePercentage = ability_based_percentage(adventurer!.xp, adventurer!.stats.dexterity);
+  const attackPreviewDamage = combatStats.critChance >= 100
+    ? combatStats.criticalDamage
+    : combatStats.baseDamage;
+  const combatControlsDisabled = attackInProgress || fleeInProgress || equipInProgress || suggestInProgress;
+  const isFinalRound = simulationResult.hasOutcome && simulationResult.maxRounds <= 1;
+  const formatNumber = (value: number) => value.toLocaleString();
+  const formatRange = (minValue: number, maxValue: number) => {
+    if (Number.isNaN(minValue) || Number.isNaN(maxValue)) {
+      return '-';
+    }
+
+    if (minValue === maxValue) {
+      return formatNumber(minValue);
+    }
+
+    return `${formatNumber(minValue)} - ${formatNumber(maxValue)}`;
+  };
+  const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+
+  useEffect(() => {
+    if (adventurer?.xp === 0) {
+      setCombatLog(beast!.baseName + " ambushed you for 10 damage!");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (battleEvent && !skipCombat) {
+      if (battleEvent.type === "attack") {
+        setCombatLog(`You attacked ${beast!.baseName} for ${battleEvent.attack?.damage} damage ${battleEvent.attack?.critical_hit ? 'CRITICAL HIT!' : ''}`);
+      }
+
+      else if (battleEvent.type === "beast_attack") {
+        setCombatLog(`${beast!.baseName} attacked your ${battleEvent.attack?.location} for ${battleEvent.attack?.damage} damage ${battleEvent.attack?.critical_hit ? 'CRITICAL HIT!' : ''}`);
+      }
+
+      else if (battleEvent.type === "flee") {
+        if (battleEvent.success) {
+          setCombatLog(`You successfully fled`);
+        } else {
+          setCombatLog(`You failed to flee`);
+        }
+      }
+
+      else if (battleEvent.type === "ambush") {
+        setCombatLog(`${beast!.baseName} ambushed your ${battleEvent.attack?.location} for ${battleEvent.attack?.damage} damage ${battleEvent.attack?.critical_hit ? 'CRITICAL HIT!' : ''}`);
+      }
+    }
+  }, [battleEvent]);
+
+  useEffect(() => {
+    setAttackInProgress(false);
+    setFleeInProgress(false);
+    setEquipInProgress(false);
+    setAutoLastHitActive(false);
+    setLastHitActionCount(null);
+
+    if ([fleeMessage, attackMessage, equipMessage].includes(combatLog)) {
+      setCombatLog("");
+    }
+  }, [actionFailed]);
+
+  useEffect(() => {
+    setEquipInProgress(false);
+
+    if (!untilDeath && !autoLastHitActive) {
+      setAttackInProgress(false);
+      setFleeInProgress(false);
+    }
+  }, [adventurer!.action_count, untilDeath, autoLastHitActive]);
+
+  useEffect(() => {
+    if (!autoLastHitActive || !untilLastHit) {
+      return;
+    }
+
+    if (!adventurer || !beast) {
+      setAutoLastHitActive(false);
+      setLastHitActionCount(null);
+      setAttackInProgress(false);
+      return;
+    }
+
+    if (!simulationResult.hasOutcome) {
+      return;
+    }
+
+    if (isFinalRound) {
+      setAutoLastHitActive(false);
+      setLastHitActionCount(null);
+      setAttackInProgress(false);
+      return;
+    }
+
+    if (lastHitActionCount !== null && adventurer.action_count <= lastHitActionCount) {
+      return;
+    }
+
+    if (simulationActionCount === null || simulationActionCount !== adventurer.action_count) {
+      return;
+    }
+
+    setLastHitActionCount(adventurer.action_count);
+
+    const continueAttacking = async () => {
+      try {
+        setAttackInProgress(true);
+        setCombatLog(attackMessage);
+        await executeGameAction({ type: 'attack', untilDeath: false });
+      } catch (error) {
+        console.error('Failed to continue last-hit attack', error);
+        setAutoLastHitActive(false);
+        setLastHitActionCount(null);
+        setAttackInProgress(false);
+      }
+    };
+
+    void continueAttacking();
+  }, [
+    autoLastHitActive,
+    untilLastHit,
+    simulationResult.hasOutcome,
+    simulationResult.maxRounds,
+    isFinalRound,
+    simulationActionCount,
+    executeGameAction,
+    adventurer?.action_count,
+    beast?.id,
+  ]);
+
+  useEffect(() => {
+    if (!untilLastHit && autoLastHitActive) {
+      setAutoLastHitActive(false);
+      setLastHitActionCount(null);
+      setAttackInProgress(false);
+    }
+  }, [untilLastHit, autoLastHitActive]);
+
+  useEffect(() => {
+    if (isFinalRound && untilLastHit) {
+      setUntilLastHit(false);
+      setAutoLastHitActive(false);
+      setLastHitActionCount(null);
+    }
+  }, [isFinalRound, untilLastHit]);
+
+  const handleAttack = () => {
+    if (!adventurer) {
+      return;
+    }
+
+    if (beast?.isCollectable) {
+      localStorage.setItem('collectable_beast', JSON.stringify({
+        gameId,
+        id: beast.id,
+        specialPrefix: beast.specialPrefix,
+        specialSuffix: beast.specialSuffix,
+        name: beast.name,
+        tier: beast.tier,
+      }));
+    }
+
+    setAttackInProgress(true);
+    setCombatLog(attackMessage);
+    if (untilLastHit && !isFinalRound) {
+      setAutoLastHitActive(true);
+      setLastHitActionCount(adventurer.action_count);
+    } else {
+      setAutoLastHitActive(false);
+      setLastHitActionCount(null);
+    }
+
+    const fightToDeath = untilDeath && !untilLastHit;
+    executeGameAction({ type: 'attack', untilDeath: fightToDeath });
+  };
+
+  const handleFlee = () => {
+    localStorage.removeItem('collectable_beast');
+    setAutoLastHitActive(false);
+    setLastHitActionCount(null);
+    setFleeInProgress(true);
+    setCombatLog(fleeMessage);
+    executeGameAction({ type: 'flee', untilDeath });
+  };
+
+  const handleEquipItems = () => {
+    setEquipInProgress(true);
+    setCombatLog(equipMessage);
+    executeGameAction({ type: 'equip' });
+  };
+
+  const handleSuggestGear = async () => {
+    if (!adventurer || !bag || !beast) {
+      return;
+    }
+
+    setSuggestInProgress(true);
+
+    try {
+      const suggestion = await suggestBestCombatGear(adventurer, bag, beast);
+
+      if (!suggestion) {
+        setCombatLog('Best gear already equipped.');
+        return;
+      }
+
+      applyGearSuggestion({ adventurer: suggestion.adventurer, bag: suggestion.bag });
+      setCombatLog('Suggested combat gear equipped.');
+    } catch (error) {
+      console.error('Failed to suggest combat gear', error);
+      setCombatLog('Unable to suggest gear right now.');
+    } finally {
+      setSuggestInProgress(false);
+    }
+  };
+
+  const handleSkipCombat = () => {
+    setSkipCombat(true);
+  };
+
+  const toggleUntilDeath = (checked: boolean) => {
+    if (checked) {
+      setUntilLastHit(false);
+    }
+    setUntilDeath(checked);
+  };
+
+  const toggleUntilLastHit = (checked: boolean) => {
+    if (checked) {
+      setUntilDeath(false);
+    }
+    setUntilLastHit(checked);
+  };
+
+  const isJackpot = useMemo(() => {
+    return currentNetworkConfig.beasts && JACKPOT_BEASTS.includes(beast?.name!);
+  }, [beast]);
+
+  const combatOverview = useMemo(() => {
+    if (!adventurer || !beast) {
+      return null;
+    }
+
+    const adventurerLevel = calculateLevel(adventurer.xp);
+    const beastTier = Math.min(5, Math.max(1, Number(beast.tier)));
+
+    const tierKey = `T${beastTier}` as keyof typeof GOLD_MULTIPLIER;
+    const goldMultiplier = GOLD_MULTIPLIER[tierKey] ?? 1;
+    const goldReward = Math.max(
+      0,
+      Math.floor((beast.level * goldMultiplier) / GOLD_REWARD_DIVISOR)
+    );
+
+    const rawXp = Math.floor(((6 - beastTier) * beast.level) / 2);
+    const adjustedXp = Math.floor(
+      rawXp * (100 - Math.min(adventurerLevel * 2, 95)) / 100
+    );
+    const xpReward = Math.max(MINIMUM_XP_REWARD, adjustedXp);
+
+    const critChance = Math.min(100, Math.max(0, adventurer.stats.luck ?? 0));
+
+    return {
+      critChance,
+      goldReward,
+      xpReward,
+    };
+  }, [
+    adventurer?.xp,
+    adventurer?.stats.luck,
+    adventurer?.equipment.weapon.id,
+    adventurer?.equipment.weapon.xp,
+    beast,
+  ]);
+
+  const adventurerLevel = useMemo(() => {
+    if (!adventurer) {
+      return 0;
+    }
+
+    return calculateLevel(adventurer.xp);
+  }, [adventurer?.xp]);
+
+  const potionCost = useMemo(() => {
+    if (!adventurer) {
+      return 0;
+    }
+
+    return potionPrice(adventurerLevel, adventurer.stats.charisma ?? 0);
+  }, [adventurerLevel, adventurer?.stats.charisma]);
+
+  const potionCoverage = useMemo(() => {
+    if (!combatOverview) {
+      return { potions: 0, coverage: 0 };
+    }
+
+    if (potionCost <= 0) {
+      return { potions: Number.POSITIVE_INFINITY, coverage: Number.POSITIVE_INFINITY };
+    }
+
+    const potions = Math.floor(combatOverview.goldReward / potionCost);
+    return {
+      potions,
+      coverage: potions * 10,
+    };
+  }, [combatOverview?.goldReward, potionCost]);
+
+  const potentialHealthChange = useMemo(() => {
+    if (!simulationResult.hasOutcome) {
+      return 0;
+    }
+
+    const damageTaken = Math.max(0, simulationResult.modeDamageTaken);
+    if (potionCoverage.coverage === Number.POSITIVE_INFINITY) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    return potionCoverage.coverage - damageTaken;
+  }, [simulationResult.hasOutcome, simulationResult.modeDamageTaken, potionCoverage.coverage]);
+
+  const isPotentialHealthNegative = simulationResult.hasOutcome
+    && Number.isFinite(potentialHealthChange)
+    && potentialHealthChange < 0;
+  const isPotentialHealthPositive = simulationResult.hasOutcome
+    && (potentialHealthChange === Number.POSITIVE_INFINITY || potentialHealthChange > 0);
+  const potentialHealthChangeText = (() => {
+    if (!simulationResult.hasOutcome) {
+      return '-';
+    }
+
+    if (!Number.isFinite(potentialHealthChange)) {
+      return '∞';
+    }
+
+    const rounded = Math.round(potentialHealthChange);
+    if (rounded === 0) {
+      return '0';
+    }
+
+    const formatted = formatNumber(Math.abs(rounded));
+    return `${rounded > 0 ? '+' : '-'}${formatted}`;
+  })();
+
+  const healthTileStyles = simulationResult.hasOutcome
+    ? (isPotentialHealthNegative
+      ? styles.outcomeTileHealthNegative
+      : (isPotentialHealthPositive ? styles.outcomeTileHealthPositive : styles.outcomeTileHealthNeutral))
+    : styles.outcomeTileHealthNeutral;
+
+  return (
+    <Box sx={[styles.container, spectating && styles.spectating]}>
+      {beast?.baseName && <Box sx={[styles.imageContainer, { backgroundImage: `url('/images/battle_scenes/${isJackpot ? `jackpot_${beast!.baseName.toLowerCase()}` : beast!.baseName.toLowerCase()}.png')` }]} />}
+
+      {/* Adventurer */}
+      <Adventurer combatStats={combatStats} />
+
+      {/* Beast */}
+      <Beast />
+
+      {beast && combatOverview && (
+        <Box sx={{
+          ...styles.insightsPanel,
+          top: scalePx(162),
+          right: scalePx(30),
+          width: scalePx(360),
+          padding: `${scalePx(12)}px ${scalePx(14)}px`,
+        }}>
+          <Typography sx={styles.insightsTitle}>Combat Insights</Typography>
+
+          <Box sx={styles.insightsSection}>
+            <Typography sx={styles.sectionTitle}>Adventurer Data</Typography>
+            <Box sx={styles.adventurerMetricsRow}>
+              <Box sx={styles.metricItem}>
+                <Typography sx={styles.metricLabel}>Attack DMG</Typography>
+                <Typography sx={styles.metricValue}>{formatNumber(Math.round(combatStats.baseDamage))}</Typography>
+              </Box>
+              <Box sx={styles.metricItem}>
+                <Typography sx={styles.metricLabel}>Crit %</Typography>
+                <Typography sx={styles.metricValue}>{formatPercent(combatStats.critChance)}</Typography>
+              </Box>
+              <Box sx={styles.metricItem}>
+                <Typography sx={styles.metricLabel}>Crit DMG</Typography>
+                <Typography sx={styles.metricValue}>{formatNumber(Math.round(combatStats.criticalDamage))}</Typography>
+              </Box>
+            </Box>
+          </Box>
+
+          <Box sx={styles.sectionDivider} />
+
+          <Box sx={styles.insightsSection}>
+            <Typography sx={styles.sectionTitle}>Fight Probabilities</Typography>
+            {simulationResult.hasOutcome ? (
+              <>
+                <Box sx={styles.tilesRowThree}>
+                  <Box
+                    sx={[styles.infoTile, styles.tipTile,
+                      simulationResult.winRate >= 100
+                        ? styles.tipTileFight
+                        : simulationResult.winRate < 10
+                          ? styles.tipTileFlee
+                          : styles.tipTileGamble
+                    ]}
+                  >
+                    <Typography sx={styles.tileLabel}>Tip</Typography>
+                    <Typography sx={styles.tileValue}>
+                      {simulationResult.winRate >= 100 ? 'Fight' : simulationResult.winRate < 10 ? 'Flee' : 'Gamble'}
+                    </Typography>
+                  </Box>
+                  <Box sx={[styles.infoTile, styles.fightTileWin]}>
+                    <Typography sx={styles.tileLabel}>Win %</Typography>
+                    <Typography sx={styles.tileValue}>{formatPercent(simulationResult.winRate)}</Typography>
+                    <Typography sx={styles.tileSubValue}>
+                      {`${formatNumber(Math.round(simulationResult.winRate))}/100`}
+                    </Typography>
+                  </Box>
+                  <Box sx={[styles.infoTile, styles.fightTileLethal]}>
+                    <Typography sx={styles.tileLabel}>OTK Chance</Typography>
+                    <Typography sx={styles.tileValue}>{formatPercent(simulationResult.otkRate)}</Typography>
+                    <Typography sx={styles.tileSubValue}>
+                      {`${formatNumber(Math.round(simulationResult.otkRate))}/100`}
+                    </Typography>
+                  </Box>
+                </Box>
+                <Box sx={styles.tilesRowThree}>
+                  <Box sx={[styles.infoTile, styles.fightTileNeutral]}>
+                    <Typography sx={styles.tileLabel}>Rounds</Typography>
+                    <Typography sx={styles.tileValue}>{formatNumber(simulationResult.modeRounds)}</Typography>
+                    <Typography sx={styles.tileSubValue}>
+                      {formatRange(simulationResult.minRounds, simulationResult.maxRounds)}
+                    </Typography>
+                  </Box>
+                  <Box sx={[styles.infoTile, styles.fightTileWin]}>
+                    <Typography sx={styles.tileLabel}>DMG Dealt</Typography>
+                    <Typography sx={styles.tileValue}>{formatNumber(simulationResult.modeDamageDealt)}</Typography>
+                    <Typography sx={styles.tileSubValue}>
+                      {formatRange(simulationResult.minDamageDealt, simulationResult.maxDamageDealt)}
+                    </Typography>
+                  </Box>
+                  <Box sx={[styles.infoTile, styles.fightTileLethal]}>
+                    <Typography sx={styles.tileLabel}>DMG Taken</Typography>
+                    <Typography sx={styles.tileValue}>{formatNumber(Math.round(simulationResult.modeDamageTaken))}</Typography>
+                    <Typography sx={styles.tileSubValue}>
+                      {formatRange(simulationResult.minDamageTaken, simulationResult.maxDamageTaken)}
+                    </Typography>
+                  </Box>
+                </Box>
+              </>
+            ) : (
+              <Typography sx={styles.placeholderText}>Run a simulation to view probabilities</Typography>
+            )}
+          </Box>
+
+          <Box sx={styles.sectionDivider} />
+
+          <Box sx={styles.insightsSection}>
+            <Typography sx={styles.sectionTitle}>Victory Outcome</Typography>
+            <Box sx={styles.tilesRowThree}>
+              <Box sx={[styles.infoTile, styles.outcomeTileXp]}>
+                <Typography sx={styles.tileLabel}>XP</Typography>
+                <Typography sx={styles.tileValue}>+{formatNumber(combatOverview.xpReward)}</Typography>
+              </Box>
+              <Box sx={[styles.infoTile, styles.outcomeTileGold]}>
+                <Typography sx={styles.tileLabel}>Gold</Typography>
+                <Typography sx={styles.tileValue}>+{formatNumber(combatOverview.goldReward)}</Typography>
+              </Box>
+              <Box sx={[styles.infoTile, healthTileStyles]}>
+                <Typography sx={styles.tileLabel}>HP</Typography>
+                <Typography sx={styles.tileValue}>
+                  {simulationResult.hasOutcome
+                    ? `${potentialHealthChangeText}`
+                    : '-'}
+                </Typography>
+              </Box>
+            </Box>
+          </Box>
+        </Box>
+      )}
+
+      {/* Combat Log */}
+      <Box sx={{
+        ...styles.middleSection,
+        top: scalePx(30),
+        width: scalePx(340),
+        padding: `${scalePx(4)}px ${scalePx(8)}px`,
+      }}>
+        <Box sx={styles.combatLogContainer}>
+          <AnimatedText text={combatLog} />
+          {(combatLog === fleeMessage || combatLog === attackMessage || combatLog === equipMessage)
+            && <div className='dotLoader yellow' style={{ marginTop: '6px' }} />}
+        </Box>
+      </Box>
+
+      {/* Skip Animations Toggle */}
+      {showSkipCombat && (untilDeath || autoLastHitActive) && <Box sx={{
+        ...styles.skipContainer,
+        top: scalePx(112),
+      }}>
+        <Button
+          variant="outlined"
+          onClick={handleSkipCombat}
+          sx={{
+            ...styles.skipButton,
+            width: scalePx(90),
+            height: scalePx(32),
+          }}
+          disabled={skipCombat}
+        >
+          <Typography fontWeight={600}>
+            Skip
+          </Typography>
+          <Box sx={{ fontSize: '0.6rem' }}>
+            ▶▶
+          </Box>
+        </Button>
+      </Box>}
+
+      <InventoryOverlay disabledEquip={attackInProgress || fleeInProgress || equipInProgress || suggestInProgress} />
+
+      {/* Combat Buttons */}
+      {!spectating && <Box sx={{
+        ...styles.buttonContainer,
+        bottom: scalePx(32),
+        gap: `${scalePx(16)}px`,
+      }}>
+        {hasNewItemsEquipped ? (
+          <>
+            <Box sx={styles.actionButtonContainer}>
+              <Button
+                variant="contained"
+                onClick={handleEquipItems}
+                sx={{ ...styles.attackButton, width: scalePx(190), height: scalePx(48) }}
+                disabled={equipInProgress}
+              >
+                <Box sx={{ opacity: equipInProgress ? 0.5 : 1 }}>
+                  <Typography sx={styles.buttonText}>
+                    EQUIP
+                  </Typography>
+                </Box>
+              </Button>
+            </Box>
+
+            <Box sx={styles.actionButtonContainer}>
+              <Button
+                variant="contained"
+                onClick={undoEquipment}
+                sx={{ ...styles.fleeButton, width: scalePx(190), height: scalePx(48) }}
+                disabled={equipInProgress}
+              >
+                <Box sx={{ opacity: equipInProgress ? 0.5 : 1 }}>
+                  <Typography sx={styles.buttonText}>
+                    UNDO
+                  </Typography>
+                </Box>
+              </Button>
+            </Box>
+          </>
+        ) : (
+          <>
+            <Box sx={styles.actionButtonContainer}>
+              <Button
+                variant="contained"
+                onClick={handleAttack}
+                sx={{ ...styles.attackButton, width: scalePx(190), height: scalePx(48) }}
+                disabled={!adventurer || !beast || attackInProgress || fleeInProgress || equipInProgress || suggestInProgress}
+              >
+                <Box sx={{ opacity: !adventurer || !beast || attackInProgress || fleeInProgress || equipInProgress || suggestInProgress ? 0.5 : 1 }}>
+                  <Typography sx={styles.buttonText}>
+                    ATTACK
+                  </Typography>
+
+                  <Typography sx={styles.buttonHelperText}>
+                    {`${formatNumber(Math.round(attackPreviewDamage))} damage`}
+                  </Typography>
+                </Box>
+              </Button>
+            </Box>
+
+            <Box sx={styles.actionButtonContainer}>
+              <Button
+                variant="contained"
+                onClick={handleSuggestGear}
+                sx={{ ...styles.suggestButton, width: scalePx(190), height: scalePx(48) }}
+                disabled={!adventurer || !beast || attackInProgress || fleeInProgress || equipInProgress || suggestInProgress}
+              >
+                <Box sx={{ opacity: attackInProgress || fleeInProgress || equipInProgress || suggestInProgress ? 0.5 : 1 }}>
+                  <Typography sx={styles.buttonText}>
+                    SUGGEST
+                  </Typography>
+                  <Typography sx={styles.buttonHelperText}>
+                    optimal gear
+                  </Typography>
+                </Box>
+              </Button>
+            </Box>
+
+            <Box sx={styles.actionButtonContainer}>
+              <Button
+                variant="contained"
+                onClick={handleFlee}
+                sx={{ ...styles.fleeButton, width: scalePx(190), height: scalePx(48) }}
+                disabled={adventurer!.stats.dexterity === 0 || fleeInProgress || attackInProgress || equipInProgress || suggestInProgress}
+              >
+                <Box sx={{ opacity: adventurer!.stats.dexterity === 0 || fleeInProgress || attackInProgress || equipInProgress || suggestInProgress ? 0.5 : 1 }}>
+                  <Typography sx={styles.buttonText}>
+                    FLEE
+                  </Typography>
+                  <Typography sx={styles.buttonHelperText}>
+                    {adventurer!.stats.dexterity === 0 ? 'No Dexterity' : `${fleePercentage}% chance`}
+                  </Typography>
+                </Box>
+              </Button>
+            </Box>
+
+            <Box sx={styles.deathCheckboxRow}>
+              <Box
+                sx={styles.deathCheckboxContainer}
+                onClick={() => {
+                  if (!combatControlsDisabled && !isFinalRound) {
+                    toggleUntilLastHit(!untilLastHit);
+                  }
+                }}
+              >
+                <Typography sx={styles.deathCheckboxLabel}>
+                  until<br />last hit
+                </Typography>
+                <Checkbox
+                  checked={untilLastHit}
+                  disabled={combatControlsDisabled || isFinalRound}
+                  onChange={(e) => toggleUntilLastHit(e.target.checked)}
+                  size="medium"
+                  sx={styles.deathCheckbox}
+                />
+              </Box>
+
+              <Box
+                sx={styles.deathCheckboxContainer}
+                onClick={() => {
+                  if (!combatControlsDisabled) {
+                    toggleUntilDeath(!untilDeath);
+                  }
+                }}
+              >
+                <Typography sx={styles.deathCheckboxLabel}>
+                  until<br />death
+                </Typography>
+                <Checkbox
+                  checked={untilDeath}
+                  disabled={combatControlsDisabled}
+                  onChange={(e) => toggleUntilDeath(e.target.checked)}
+                  size="medium"
+                  sx={styles.deathCheckbox}
+                />
+              </Box>
+            </Box>
+          </>
+        )}
+      </Box>}
+    </Box>
+  );
+}
+
+const styles = {
+  container: {
+    width: '100%',
+    height: '100dvh',
+    display: 'flex',
+    flexDirection: 'column',
+    position: 'relative',
+  },
+  spectating: {
+    border: '1px solid rgba(128, 255, 0, 0.6)',
+    boxSizing: 'border-box',
+  },
+  imageContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat',
+    backgroundColor: '#000',
+  },
+  middleSection: {
+    position: 'absolute',
+    // top, width, padding set dynamically via useResponsiveScale
+    left: '50%',
+    border: '2px solid #083e22',
+    borderRadius: '12px',
+    background: 'rgba(24, 40, 24, 0.55)',
+    backdropFilter: 'blur(8px)',
+    transform: 'translateX(-50%)',
+  },
+  combatLogContainer: {
+    width: '100%',
+    minHeight: '40px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonContainer: {
+    position: 'absolute',
+    // bottom, gap set dynamically via useResponsiveScale
+    left: '50%',
+    transform: 'translateX(calc(-32%))',
+    display: 'flex',
+    alignItems: 'flex-end',
+  },
+  actionButtonContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+  },
+  attackButton: {
+    border: '3px solid rgb(8, 62, 34)',
+    background: 'rgba(24, 40, 24, 1)',
+    // width, height set dynamically via useResponsiveScale
+    justifyContent: 'center',
+    borderRadius: '8px',
+    '&:hover': {
+      background: 'rgba(34, 60, 34, 1)',
+    },
+    '&:disabled': {
+      background: 'rgba(24, 40, 24, 1)',
+      borderColor: 'rgba(8, 62, 34, 0.5)',
+    },
+  },
+  fleeButton: {
+    // width, height set dynamically via useResponsiveScale
+    justifyContent: 'center',
+    background: 'rgba(60, 16, 16, 1)',
+    borderRadius: '8px',
+    border: '3px solid #6a1b1b',
+    '&:hover': {
+      background: 'rgba(90, 24, 24, 1)',
+    },
+    '&:disabled': {
+      background: 'rgba(60, 16, 16, 1)',
+      borderColor: 'rgba(106, 27, 27, 0.5)',
+    },
+  },
+  suggestButton: {
+    // width, height set dynamically via useResponsiveScale
+    justifyContent: 'center',
+    background: 'rgba(16, 32, 48, 1)',
+    borderRadius: '8px',
+    border: '3px solid #1e3a5c',
+    '&:hover': {
+      background: 'rgba(24, 48, 72, 1)',
+    },
+    '&:disabled': {
+      background: 'rgba(16, 32, 48, 1)',
+      borderColor: 'rgba(30, 58, 92, 0.5)',
+    },
+  },
+  buttonIcon: {
+    fontSize: '2.2rem',
+    color: '#FFD700',
+    filter: 'drop-shadow(0 0 6px #FFD70088)',
+    marginRight: '8px',
+  },
+  buttonText: {
+    fontFamily: 'Cinzel, Georgia, serif',
+    fontWeight: 600,
+    fontSize: '1rem',
+    color: '#d0c98d',
+    letterSpacing: '1px',
+    lineHeight: 1.1,
+  },
+  buttonHelperText: {
+    color: '#d0c98d',
+    fontSize: '12px',
+    opacity: 0.8,
+    lineHeight: '12px',
+    textTransform: 'none',
+  },
+  deathCheckboxRow: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: '16px',
+  },
+  deathCheckboxContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minWidth: '32px',
+    cursor: 'pointer',
+  },
+  deathCheckboxLabel: {
+    color: 'rgba(208, 201, 141, 0.7)',
+    fontSize: '0.75rem',
+    fontFamily: 'Cinzel, Georgia, serif',
+    lineHeight: '0.9',
+    textAlign: 'center',
+  },
+  deathCheckbox: {
+    color: 'rgba(208, 201, 141, 0.7)',
+    padding: '0',
+    '&.Mui-checked': {
+      color: '#d0c98d',
+    },
+  },
+  insightsPanel: {
+    position: 'absolute',
+    // top, right, width, padding set dynamically via useResponsiveScale
+    border: '2px solid #083e22',
+    borderRadius: '12px',
+    background: 'rgba(24, 40, 24, 0.65)',
+    boxShadow: '0 0 10px rgba(0, 0, 0, 0.45)',
+    backdropFilter: 'blur(8px)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    zIndex: 80,
+  },
+  insightsTitle: {
+    color: '#d0c98d',
+    fontFamily: 'Cinzel, Georgia, serif',
+    fontSize: '0.92rem',
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.6px',
+    textAlign: 'center',
+  },
+  insightsSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  sectionTitle: {
+    color: '#d0c98d',
+    fontFamily: 'Cinzel, Georgia, serif',
+    fontSize: '0.78rem',
+    fontWeight: 600,
+    letterSpacing: '0.35px',
+  },
+  sectionDivider: {
+    margin: '4px 0 2px',
+    borderTop: '1px solid rgba(208, 201, 141, 0.2)',
+  },
+  tilesRowThree: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: '6px',
+  },
+  infoTile: {
+    borderRadius: '10px',
+    padding: '7px 9px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    border: '1px solid rgba(120, 150, 130, 0.35)',
+    background: 'rgba(16, 28, 20, 0.8)',
+  },
+  adventurerMetricsRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: '6px',
+  },
+  metricItem: {
+    borderRadius: '8px',
+    padding: '6px 8px',
+    border: '1px solid rgba(120, 150, 130, 0.35)',
+    background: 'rgba(16, 28, 20, 0.8)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  metricLabel: {
+    color: 'rgba(208, 201, 141, 0.7)',
+    fontSize: '0.6rem',
+    letterSpacing: '0.35px',
+    textTransform: 'uppercase',
+  },
+  metricValue: {
+    color: '#ffffff',
+    fontFamily: 'Cinzel, Georgia, serif',
+    fontSize: '0.94rem',
+    fontWeight: 600,
+    lineHeight: 1.1,
+  },
+  tileLabel: {
+    color: 'rgba(208, 201, 141, 0.8)',
+    fontSize: '0.64rem',
+    letterSpacing: '0.4px',
+    textTransform: 'uppercase',
+  },
+  tileValue: {
+    color: '#ffffff',
+    fontFamily: 'Cinzel, Georgia, serif',
+    fontSize: '0.96rem',
+    fontWeight: 600,
+    lineHeight: 1.1,
+  },
+  tileSubValue: {
+    color: 'rgba(208, 201, 141, 0.72)',
+    fontSize: '0.68rem',
+    fontWeight: 500,
+  },
+  fightTileWin: {
+    background: 'linear-gradient(135deg, rgba(46, 110, 60, 0.78), rgba(18, 58, 32, 0.92))',
+    border: '1px solid rgba(96, 186, 120, 0.6)',
+    boxShadow: '0 0 10px rgba(96, 186, 120, 0.25)',
+  },
+  fightTileLethal: {
+    background: 'linear-gradient(135deg, rgba(140, 46, 42, 0.78), rgba(78, 22, 18, 0.92))',
+    border: '1px solid rgba(212, 102, 96, 0.6)',
+    boxShadow: '0 0 10px rgba(212, 102, 96, 0.25)',
+  },
+  fightTileNeutral: {
+    border: '1px solid rgba(168, 168, 168, 0.35)',
+  },
+  fightTilePositive: {
+    border: '1px solid rgba(142, 198, 156, 0.45)',
+  },
+  fightTileNegative: {
+    border: '1px solid rgba(214, 120, 118, 0.45)',
+  },
+  damageTile: {
+    border: '1px solid rgba(168, 168, 168, 0.35)',
+    background: 'linear-gradient(135deg, rgba(68, 72, 60, 0.6), rgba(34, 36, 28, 0.85))',
+  },
+  placeholderText: {
+    color: 'rgba(208, 201, 141, 0.65)',
+    fontSize: '0.72rem',
+    textAlign: 'center',
+    paddingTop: '4px',
+  },
+  outcomeTileXp: {
+    background: 'linear-gradient(135deg, rgba(156, 39, 176, 0.55), rgba(102, 24, 118, 0.45))',
+    border: '1px solid rgba(182, 88, 204, 0.7)',
+    boxShadow: '0 0 10px rgba(156, 39, 176, 0.35)',
+  },
+  outcomeTileGold: {
+    background: 'linear-gradient(135deg, rgba(156, 118, 36, 0.65), rgba(86, 52, 12, 0.8))',
+    border: '1px solid rgba(208, 180, 120, 0.7)',
+    boxShadow: '0 0 10px rgba(208, 180, 120, 0.35)',
+  },
+  outcomeTileHealthPositive: {
+    background: 'linear-gradient(135deg, rgba(46, 110, 60, 0.78), rgba(18, 58, 32, 0.92))',
+    border: '1px solid rgba(96, 186, 120, 0.6)',
+    boxShadow: '0 0 10px rgba(96, 186, 120, 0.25)',
+  },
+  outcomeTileHealthNegative: {
+    background: 'linear-gradient(135deg, rgba(140, 46, 42, 0.78), rgba(78, 22, 18, 0.92))',
+    border: '1px solid rgba(212, 102, 96, 0.6)',
+    boxShadow: '0 0 10px rgba(212, 102, 96, 0.25)',
+  },
+  outcomeTileHealthNeutral: {
+    border: '1px solid rgba(168, 168, 168, 0.35)',
+  },
+  tipTile: {
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  tipTileFight: {
+    border: '1px solid rgba(96, 186, 120, 0.7)',
+    background: 'linear-gradient(135deg, rgba(46, 110, 60, 0.78), rgba(18, 58, 32, 0.92))',
+    boxShadow: '0 0 12px rgba(96, 186, 120, 0.6)',
+    animation: `${tipPulseFight} 1.6s ease-in-out infinite`,
+  },
+  tipTileFlee: {
+    border: '1px solid rgba(212, 102, 96, 0.7)',
+    background: 'linear-gradient(135deg, rgba(140, 46, 42, 0.78), rgba(78, 22, 18, 0.92))',
+    boxShadow: '0 0 12px rgba(212, 102, 96, 0.6)',
+    animation: `${tipPulseFlee} 1.6s ease-in-out infinite`,
+  },
+  tipTileGamble: {
+    border: '1px solid rgba(208, 180, 120, 0.7)',
+    background: 'linear-gradient(135deg, rgba(156, 118, 36, 0.65), rgba(86, 52, 12, 0.8))',
+    boxShadow: '0 0 12px rgba(208, 180, 120, 0.55)',
+    animation: `${tipPulseGamble} 1.6s ease-in-out infinite`,
+  },
+  skipContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    position: 'absolute',
+    // top set dynamically via useResponsiveScale
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 10,
+  },
+  skipButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    // width, height set dynamically via useResponsiveScale
+  },
+};

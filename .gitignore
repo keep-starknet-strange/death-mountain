@@ -1,0 +1,13 @@
+node_modules
+contracts/target
+contracts/torii.db
+contracts/KATANA.toml
+contracts/manifests
+contracts/deploy
+contracts/.DS_Store
+.DS_Store
+veo-client/tsconfig.tsbuildinfo
+.env
+.env.local
+*.env.bak
+argent_account_*.json

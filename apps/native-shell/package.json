@@ -1,0 +1,45 @@
+{
+  "name": "death-mountain-native-shell",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.12.1",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "prebuild": "expo prebuild",
+    "prebuild:clean": "expo prebuild --clean",
+    "sync:controller-module": "bash scripts/sync_controller_module.sh",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "expo": "~54.0.8",
+    "expo-constants": "^18.0.10",
+    "expo-linking": "^8.0.8",
+    "expo-router": "^6.0.14",
+    "expo-secure-store": "^15.0.2",
+    "expo-status-bar": "~3.0.8",
+    "expo-web-browser": "^15.0.9",
+    "react": "19.1.0",
+    "react-native": "0.81.4",
+    "react-native-gesture-handler": "^2.29.1",
+    "react-native-get-random-values": "^1.11.0",
+    "react-native-reanimated": "~4.1.0",
+    "react-native-safe-area-context": "^5.6.2",
+    "react-native-screens": "^4.18.0",
+    "react-native-webview": "^13.15.0",
+    "react-native-worklets": "0.7.1",
+    "uniffi-bindgen-react-native": "github:Larkooo/uniffi-bindgen-react-native#update-uniffi-0.30"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@types/react": "~19.1.1",
+    "babel-preset-expo": "~54.0.6",
+    "eslint": "^9.24.0",
+    "typescript": "~5.9.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

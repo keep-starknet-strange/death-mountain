@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Death Mountain (Native Shell)",
+    "slug": "death-mountain-native-shell",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": ["**/*"],
+    "scheme": "deathmountain",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "gg.deathmountain.nativeshell",
+      "newArchEnabled": true
+    },
+    "android": {
+      "package": "gg.deathmountain.nativeshell",
+      "newArchEnabled": true
+    },
+    "plugins": [],
+    "experiments": {
+      "tsconfigPaths": true
+    }
+  }
+}
+

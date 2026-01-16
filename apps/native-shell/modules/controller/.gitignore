@@ -1,0 +1,5 @@
+# Downloaded by scripts/sync_controller_module.sh (large binaries / generated native)
+Controller.xcframework/
+ios/
+cpp/
+
