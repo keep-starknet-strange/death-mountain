@@ -1,25 +1,55 @@
 {
   "expo": {
-    "name": "Death Mountain (Native Shell)",
-    "slug": "death-mountain-native-shell",
-    "version": "0.1.0",
+    "name": "Loot Survivor",
+    "slug": "loot-survivor-native",
+    "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "assetBundlePatterns": ["**/*"],
-    "scheme": "deathmountain",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "gg.deathmountain.nativeshell",
-      "newArchEnabled": true
+      "bundleIdentifier": "com.lootsurvivordm.native",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app does not use the camera.",
+        "NSMicrophoneUsageDescription": "This app does not use the microphone."
+      }
     },
     "android": {
-      "package": "gg.deathmountain.nativeshell",
-      "newArchEnabled": true
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "package": "com.lootsurvivordm.native"
     },
-    "plugins": [],
-    "experiments": {
-      "tsconfigPaths": true
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "scheme": "lootsurvivordm",
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1"
+          },
+          "android": {
+            "minSdkVersion": 24
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "your-project-id"
+      }
     }
   }
 }
-

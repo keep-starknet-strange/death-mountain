@@ -20,7 +20,7 @@ import { Account, RpcProvider } from "starknet";
 import { useDynamicConnector } from "./starknet";
 import { delay } from "@/utils/utils";
 import { useDungeon } from "@/dojo/useDungeon";
-import { isNativeShell } from "@/nativeShell/isNativeShell";
+import { isNativeShell, getNativeBridge, NativeAccountAdapter } from "@/utils/nativeBridge";
 
 export interface ControllerContext {
   account: any;
@@ -65,15 +65,47 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
   const [goldenPassIds, setGoldenPassIds] = useState<number[]>([]);
   const [showTermsOfService, setShowTermsOfService] = useState(false);
   const { identifyAddress } = useAnalytics();
-  const nativeShell = isNativeShell();
+  
+  // Native shell state
+  const [nativeAccount, setNativeAccount] = useState<NativeAccountAdapter | null>(null);
+  const [nativeAddress, setNativeAddress] = useState<string | null>(null);
+  const [nativeUsername, setNativeUsername] = useState<string | null>(null);
+  const isNative = isNativeShell();
 
   const demoRpcProvider = useMemo(
     () => new RpcProvider({ nodeUrl: NETWORKS.WP_PG_SLOT.rpcUrl }),
     []
   );
 
+  // Initialize native shell if applicable
   useEffect(() => {
-    if (account) {
+    if (isNative) {
+      initializeNativeShell();
+    }
+  }, [isNative]);
+
+  const initializeNativeShell = async () => {
+    try {
+      const bridge = getNativeBridge();
+      
+      // Check if already logged in
+      const { address } = await bridge.getAddress();
+      if (address) {
+        setNativeAddress(address);
+        setNativeAccount(new NativeAccountAdapter(address));
+        
+        const { username } = await bridge.getUsername();
+        setNativeUsername(username || null);
+        
+        identifyAddress({ address });
+      }
+    } catch (error) {
+      console.error('Failed to initialize native shell:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (account && !isNative) {
       fetchTokenBalances();
       identifyAddress({ address: account.address });
 
@@ -86,7 +118,7 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
         setShowTermsOfService(true);
       }
     }
-  }, [account]);
+  }, [account, isNative]);
 
   useEffect(() => {
     if (
@@ -190,37 +222,89 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
     setShowTermsOfService(false);
   };
 
+  // Native shell login handler
+  const handleNativeLogin = async () => {
+    if (!isNative) return;
+    
+    try {
+      const bridge = getNativeBridge();
+      const result = await bridge.login();
+      
+      setNativeAddress(result.address);
+      setNativeAccount(new NativeAccountAdapter(result.address));
+      setNativeUsername(result.username || null);
+      
+      identifyAddress({ address: result.address });
+    } catch (error) {
+      console.error('Native login failed:', error);
+      throw error;
+    }
+  };
+
+  // Native shell logout handler
+  const handleNativeLogout = async () => {
+    if (!isNative) return;
+    
+    try {
+      const bridge = getNativeBridge();
+      await bridge.logout();
+      
+      setNativeAddress(null);
+      setNativeAccount(null);
+      setNativeUsername(null);
+    } catch (error) {
+      console.error('Native logout failed:', error);
+      throw error;
+    }
+  };
+
+  // Native shell open profile handler
+  const handleNativeOpenProfile = async () => {
+    if (!isNative) return;
+    
+    try {
+      const bridge = getNativeBridge();
+      await bridge.openProfile();
+    } catch (error) {
+      console.error('Native open profile failed:', error);
+    }
+  };
+
   return (
     <ControllerContext.Provider
       value={{
-        account:
-          currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
-            ? burner
-            : account,
-        address:
-          currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
-            ? burner?.address
-            : address,
-        playerName: userName || "Adventurer",
+        account: isNative
+          ? nativeAccount
+          : currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
+          ? burner
+          : account,
+        address: isNative
+          ? nativeAddress || undefined
+          : currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
+          ? burner?.address
+          : address,
+        playerName: isNative 
+          ? (nativeUsername || "Adventurer")
+          : (userName || "Adventurer"),
         isPending: isConnecting || isPending || creatingBurner,
         tokenBalances,
         goldenPassIds,
         showTermsOfService,
         acceptTermsOfService,
 
-        openProfile: () =>
-          nativeShell
-            ? (connector as any)?.openProfile?.()
-            : (connector as any)?.controller?.openProfile(),
-        openBuyTicket: () =>
-          (connector as any)?.controller?.openStarterPack?.("ls2-dungeon-ticket-mainnet"),
-        login: () =>
-          connect({
-            connector: connectors.find((conn) =>
-              conn.id === (nativeShell ? "native-shell" : "controller")
-            ),
-          }),
-        logout: () => disconnect(),
+        openProfile: isNative 
+          ? handleNativeOpenProfile
+          : () => (connector as any)?.controller?.openProfile(),
+        openBuyTicket: () => (connector as any)?.controller?.openStarterPack("ls2-dungeon-ticket-mainnet"),
+        login: isNative
+          ? handleNativeLogin
+          : () =>
+              connect({
+                connector: connectors.find((conn) => conn.id === "controller"),
+              }),
+        logout: isNative
+          ? handleNativeLogout
+          : () => disconnect(),
         enterDungeon,
         bulkMintGames,
       }}

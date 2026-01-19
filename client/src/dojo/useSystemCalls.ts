@@ -19,6 +19,7 @@ import { useAnalytics } from "@/utils/analytics";
 import { useSnackbar } from "notistack";
 import { useGameTokens } from "./useGameTokens";
 import { num } from "starknet";
+import { isNativeShell, NativeAccountAdapter } from "@/utils/nativeBridge";
 
 const TICKET_PRICE_WEI = BigInt("1000000000000000000");
 
@@ -72,6 +73,8 @@ export const useSystemCalls = () => {
         await waitForGlobalState(adventurer.action_count);
       }
 
+      // Execute using the account (works for both native and web)
+      // The account will be a NativeAccountAdapter if in native shell
       let tx = await account!.execute(calls);
       let receipt: any = await waitForAcceptedTransaction(tx.transaction_hash, 0);
 
@@ -359,7 +362,7 @@ export const useSystemCalls = () => {
    * @param statUpgrades Object containing stat upgrades
    * @param items Array of items to purchase
    */
-  const buyItems = (gameId: number, potions: number, items: ItemPurchase[]) => {
+  const buyItems = (gameId: number, potions: number, items: ItemPurchase[], _remainingGold?: number) => {
     return {
       contractAddress: GAME_ADDRESS,
       entrypoint: "buy_items",

@@ -99,7 +99,24 @@ const highlightPulse = keyframes`
   }
 `;
 
-export default function MarketOverlay() {
+const redPulse = keyframes`
+  0% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.7;
+  }
+`;
+
+interface MarketOverlayProps {
+  disabledPurchase?: boolean;
+  disabledReason?: 'exploring' | 'stats';
+}
+
+export default function MarketOverlay({ disabledPurchase = false, disabledReason }: MarketOverlayProps) {
   const { scalePx, contentOffset } = useResponsiveScale();
   const dungeon = useDungeon();
   const navigate = useNavigate();
@@ -220,7 +237,6 @@ export default function MarketOverlay() {
         setShowInventory(true);
       }
 
-
       setShowCart(false);
       setInProgress(false);
     }
@@ -299,17 +315,29 @@ export default function MarketOverlay() {
   };
 
   const handleCheckout = () => {
+    if (disabledPurchase) return;
+
     setInProgress(true);
 
-    let itemPurchases = cart.items.map(item => ({
-      item_id: item.id,
-      equip: adventurer?.equipment[ItemUtils.getItemSlot(item.id).toLowerCase() as keyof typeof adventurer.equipment]?.id === 0 ? true : false,
-    }));
+    const slotsToEquip = new Set<string>();
+    let itemPurchases = cart.items.map(item => {
+      const slot = ItemUtils.getItemSlot(item.id).toLowerCase();
+      const slotEmpty = adventurer?.equipment[slot as keyof typeof adventurer.equipment]?.id === 0;
+      const shouldEquip = slotEmpty && !slotsToEquip.has(slot);
+      if (shouldEquip) {
+        slotsToEquip.add(slot);
+      }
+      return {
+        item_id: item.id,
+        equip: shouldEquip,
+      };
+    });
 
     executeGameAction({
       type: 'buy_items',
       potions: cart.potions,
       itemPurchases,
+      remainingGold,
     });
   };
 
@@ -738,27 +766,35 @@ export default function MarketOverlay() {
       {activeTab === 'market' && (
         <Box sx={styles.marketContent}>
           <Box sx={styles.topBar}>
-            <Box sx={styles.goldDisplay}>
-              <Typography sx={styles.goldLabel} variant='h6'>Gold left:</Typography>
-              <Typography sx={styles.goldValue} variant='h6'>{remainingGold}</Typography>
-            </Box>
-            <Button
-              variant="outlined"
-              onClick={handleCheckout}
-              disabled={spectating || inProgress || cart.potions === 0 && cart.items.length === 0 || remainingGold < 0}
-              sx={{ height: '34px', width: '170px', justifyContent: 'center' }}>
-              {inProgress
-                ? <Box display={'flex'} alignItems={'baseline'}>
-                  <Typography>
-                    Processing
-                  </Typography>
-                  <div className='dotLoader yellow' />
+            {disabledPurchase ? (
+              <Typography sx={styles.disabledMarketText}>
+                {disabledReason === 'exploring' ? 'Market opens after exploration' : 'Market opens after stat selection'}
+              </Typography>
+            ) : (
+              <>
+                <Box sx={styles.goldDisplay}>
+                  <Typography sx={styles.goldLabel} variant='h6'>Gold left:</Typography>
+                  <Typography sx={styles.goldValue} variant='h6'>{remainingGold}</Typography>
                 </Box>
-                : <Typography>
-                  Purchase ({cart.potions + cart.items.length})
-                </Typography>
-              }
-            </Button>
+                <Button
+                  variant="outlined"
+                  onClick={handleCheckout}
+                  disabled={spectating || inProgress || cart.potions === 0 && cart.items.length === 0 || remainingGold < 0}
+                  sx={{ height: '34px', width: '170px', justifyContent: 'center' }}>
+                  {inProgress
+                    ? <Box display={'flex'} alignItems={'baseline'}>
+                      <Typography>
+                        Processing
+                      </Typography>
+                      <div className='dotLoader yellow' />
+                    </Box>
+                    : <Typography>
+                      Purchase ({cart.potions + cart.items.length})
+                    </Typography>
+                  }
+                </Button>
+              </>
+            )}
           </Box>
 
           <Modal
@@ -939,14 +975,19 @@ export default function MarketOverlay() {
                     <Box sx={styles.potionControls}>
                       <Typography sx={styles.potionCost}>Cost: {potionCost} Gold</Typography>
                     </Box>
-                    <Slider
-                      value={cart.potions}
-                      onChange={(_, value) => handleBuyPotion(value as number)}
-                      min={0}
-                      max={maxPotions}
-                      disabled={spectating}
-                      sx={styles.potionSlider}
-                    />
+                    {potionCost > 1 && (
+                      <Typography sx={styles.potionChaHint}>Increase Charisma</Typography>
+                    )}
+                    {!disabledPurchase && (
+                      <Slider
+                        value={cart.potions}
+                        onChange={(_, value) => handleBuyPotion(value as number)}
+                        min={0}
+                        max={maxPotions}
+                        disabled={spectating}
+                        sx={styles.potionSlider}
+                      />
+                    )}
                   </Box>
                 </Box>
               </Box>
@@ -1101,12 +1142,17 @@ export default function MarketOverlay() {
                           <Button
                             variant="outlined"
                             onClick={() => (inCart ? handleRemoveItem(item) : handleBuyItem(item))}
-                            disabled={spectating || (!inCart && (remainingGold < item.price || isItemOwned(item.id) || inventoryFull))}
+                            disabled={spectating || (!inCart && (disabledPurchase || remainingGold < item.price || isItemOwned(item.id) || inventoryFull))}
                             sx={{
                               height: '32px',
                               ...(inCart && {
                                 background: 'rgba(215, 197, 41, 0.2)',
                                 color: 'rgba(215, 197, 41, 0.8)',
+                              }),
+                              ...(!inCart && disabledPurchase && {
+                                cursor: 'not-allowed',
+                                opacity: 0.5,
+                                pointerEvents: 'auto',
                               }),
                             }}
                             size="small">
@@ -1660,6 +1706,14 @@ const styles = {
   goldValue: {
     color: '#d7c529',
   },
+  disabledMarketText: {
+    color: '#d7c529',
+    fontSize: '0.95rem',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    width: '100%',
+    py: 0.5,
+  },
   mainContent: {
     flex: 1,
     display: 'flex',
@@ -1713,6 +1767,13 @@ const styles = {
   potionCost: {
     color: '#d7c529',
     fontSize: '0.9rem',
+  },
+  potionChaHint: {
+    color: '#ff6b6b',
+    fontSize: '0.9rem',
+    fontWeight: 'bold',
+    textAlign: 'right',
+    animation: `${redPulse} 1.5s ease-in-out infinite`,
   },
   potionSlider: {
     color: '#d7c529',

@@ -8,6 +8,11 @@ contracts/.DS_Store
 .DS_Store
 veo-client/tsconfig.tsbuildinfo
 .env
+.env.*
 .env.local
+.env.*.local
 *.env.bak
+!.env.example
 argent_account_*.json
+references
+

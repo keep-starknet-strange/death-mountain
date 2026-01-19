@@ -172,7 +172,8 @@ export const GameDirector = ({ children }: PropsWithChildren) => {
       if (eventQueue.length > 0 && !isProcessing) {
         setIsProcessing(true);
         const event = eventQueue[0];
-        await processEvent(event, skipCombatDelays || skipCombat);
+        // When spectating (replay), always use delays; otherwise respect skip flags
+        await processEvent(event, !spectating && (skipCombatDelays || skipCombat));
         setEventQueue((prev) => prev.slice(1));
         setIsProcessing(false);
         setEventsProcessed((prev) => prev + 1);
@@ -180,7 +181,7 @@ export const GameDirector = ({ children }: PropsWithChildren) => {
     };
 
     processNextEvent();
-  }, [eventQueue, isProcessing, skipCombat, skipCombatDelays]);
+  }, [eventQueue, isProcessing, skipCombat, skipCombatDelays, spectating]);
 
   useEffect(() => {
     if (beastDefeated && collectable && currentNetworkConfig.beasts) {
@@ -373,7 +374,7 @@ export const GameDirector = ({ children }: PropsWithChildren) => {
     } else if (action.type === "flee") {
       txs.push(flee(gameId!, action.untilDeath!));
     } else if (action.type === "buy_items") {
-      txs.push(buyItems(gameId!, action.potions!, action.itemPurchases!));
+      txs.push(buyItems(gameId!, action.potions!, action.itemPurchases!, action.remainingGold!));
     } else if (action.type === "select_stat_upgrades") {
       txs.push(selectStatUpgrades(gameId!, action.statUpgrades!));
     } else if (action.type === "equip") {
@@ -388,6 +389,7 @@ export const GameDirector = ({ children }: PropsWithChildren) => {
     }
 
     const events = await executeAction(txs, setActionFailed);
+    if (!events) return;
 
     if (dungeon.id === "survivor" && events.some((event: any) => event.type === "defeated_beast")) {
       setBeastDefeated(true);

@@ -1,164 +1,460 @@
-## Death Mountain Native Shell (Expo)
+# Loot Survivor Native Shell
 
-This is a **third client**: a native iOS/Android shell that loads the existing web client in a `WebView` and provides **native Cartridge Controller login + signing** via a hardened JSON-RPC bridge.
+A React Native (Expo) wrapper app that provides native mobile support for the Loot Survivor web client, with integrated Cartridge Controller for native wallet functionality on iOS and Android.
 
-### What this stage includes
+## Overview
 
-- **WebView shell** loading an **HTTPS** web URL (Web Workers work reliably)
-- **Native login/session** using Cartridge’s `controller.c` React Native module (TurboModules/JSI)
-- **Bridge methods**:
-  - `controller.login`
-  - `controller.logout`
-  - `controller.getAddress`
-  - `controller.getUsername`
-  - `controller.openProfile` (best-effort fallback: opens `x.cartridge.gg`)
-  - `controller.clearCache` (clears cached session data)
-  - `starknet.execute(calls)`
-  - `starknet.waitForTransaction` (stub for now)
+This app serves as a "native shell" - it loads the existing web client in a WebView while providing native wallet capabilities through a secure JavaScript bridge. The web client detects when it's running in this native environment and routes wallet operations through the bridge instead of browser-based connectors.
 
-### Prereqs
+**Key Features:**
+- Native Cartridge Controller integration (passkeys, session keys)
+- Secure bridge for wallet operations (login, logout, transaction signing)
+- WebView with Web Workers support
+- Deep linking support
+- Secure credential storage via Expo SecureStore
 
-- Node.js **>= 20**
-- `pnpm`
-- Xcode + CocoaPods (iOS) / Android Studio (Android)
+## Architecture
 
-### Setup
+```
+┌─────────────────────────────────────┐
+│   React Native App (Expo)           │
+│  ┌──────────────────────────────┐  │
+│  │  WebView (Web Client)        │  │
+│  │  - Detects native shell      │  │
+│  │  - Uses bridge for wallet    │  │
+│  └──────────────────────────────┘  │
+│            ↕ Bridge                 │
+│  ┌──────────────────────────────┐  │
+│  │  Native Bridge Handler       │  │
+│  │  - Request validation        │  │
+│  │  - Method routing            │  │
+│  └──────────────────────────────┘  │
+│            ↕                        │
+│  ┌──────────────────────────────┐  │
+│  │  Cartridge Controller        │  │
+│  │  - Passkey auth              │  │
+│  │  - Transaction signing       │  │
+│  └──────────────────────────────┘  │
+└─────────────────────────────────────┘
+```
 
-From repo root:
+## Project Structure
+
+```
+apps/native-shell/
+├── src/
+│   ├── bridge/
+│   │   └── BridgeHandler.ts       # Handles bridge requests
+│   ├── cartridge/
+│   │   └── CartridgeController.ts # Cartridge SDK integration
+│   ├── components/
+│   │   └── NativeWebView.tsx      # WebView with bridge
+│   ├── types/
+│   │   ├── bridge.ts              # Bridge type definitions
+│   │   └── cartridge.ts           # Cartridge type definitions
+│   ├── utils/
+│   │   └── security.ts            # Security validation
+│   └── App.tsx                    # Main app component
+├── assets/                        # App icons and splash
+├── app.json                       # Expo configuration
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+## Setup
+
+### Prerequisites
+
+- Node.js 18+ and pnpm
+- Expo CLI: `npm install -g expo-cli`
+- For iOS: Xcode 14+ and iOS Simulator
+- For Android: Android Studio and Android SDK
+
+### Installation
+
+1. **Install dependencies:**
 
 ```bash
 cd apps/native-shell
 pnpm install
 ```
 
-#### 1) Set the web URL
+2. **Configure environment variables:**
 
-The native shell loads the web client from:
-
-- `EXPO_PUBLIC_NATIVE_WEB_URL` (must be HTTPS; local tunnels are fine)
-
-Example:
+Create a `.env` file in `apps/native-shell/`:
 
 ```bash
-export EXPO_PUBLIC_NATIVE_WEB_URL="https://your-staging.example.com/"
+# Web App URL - Point to your staging/production web app
+EXPO_PUBLIC_NATIVE_WEB_URL=https://lootsurvivor.io
+
+# Allowed origins for bridge communication (comma-separated)
+EXPO_PUBLIC_ALLOWED_ORIGINS=https://lootsurvivor.io,https://staging.lootsurvivor.io
+
+# Cartridge Configuration
+EXPO_PUBLIC_CARTRIDGE_RPC_URL=https://api.cartridge.gg/x/starknet/mainnet
+EXPO_PUBLIC_CHAIN_ID=SN_MAIN
 ```
 
-#### 2) Sync Cartridge native module assets (required)
+3. **Add app assets:**
 
-The upstream Cartridge native module includes native sources and an iOS `xcframework` that we **do not commit** to this repo.
+Add the following image files to `apps/native-shell/assets/`:
+- `icon.png` (1024x1024) - App icon
+- `splash.png` (2048x2048) - Splash screen
+- `adaptive-icon.png` (1024x1024) - Android adaptive icon
+- `favicon.png` (48x48) - Web favicon
 
-Important: the `xcframework` is stored in **Git LFS**, so you must have `git-lfs` installed.
+You can copy and resize from `client/public/favicon.png` or `client/public/banner.png`.
 
-macOS:
+## Development
+
+### Running the App
+
+**Start Expo development server:**
 
 ```bash
-brew install git-lfs
-git lfs install
+pnpm start
 ```
 
-Run:
+**Run on iOS Simulator:**
 
 ```bash
-pnpm sync:controller-module
-```
-
-Notes:
-- This downloads from `cartridge-gg/controller.c` (default ref: `main`).
-- To pin a tag/commit: `CONTROLLER_C_REF=0.1.0 pnpm sync:controller-module`
-- If your environment has broken TLS certs: `CURL_INSECURE=1 pnpm sync:controller-module`
-
-#### 3) Prebuild + run (dev client)
-
-This app requires a dev client because the Controller module uses TurboModules/JSI.
-
-```bash
-pnpm prebuild
 pnpm ios
-# or
+```
+
+**Run on Android Emulator:**
+
+```bash
 pnpm android
 ```
 
-### Bridge contract
+**Run on physical device:**
 
-All messages are JSON strings exchanged via `WebView.postMessage`.
+1. Install Expo Go app on your device
+2. Scan the QR code from `pnpm start`
 
-- **Request**:
-  - `jsonrpc`: `"2.0"`
-  - `id`: string
-  - `method`: string
-  - `params`: object (must include `nonce` + `origin`)
-- **Response**:
-  - `jsonrpc`: `"2.0"`
-  - `id`: string
-  - `result`: any OR `error`: `{ code, message, data? }`
+### Testing the Bridge
 
-#### Method table
+The bridge includes an `echo` method for testing:
 
-- **`controller.login`**
-  - **params**: `{ nonce, origin, rpcUrl?, cartridgeApiUrl?, keychainUrl?, maxFee?, policies? }`
-  - **result**: `{ ok: true }`
-- **`controller.logout`**
-  - **params**: `{ nonce, origin }`
-  - **result**: `{ ok: true }`
-- **`controller.getAddress`**
-  - **params**: `{ nonce, origin }`
-  - **result**: `string | null`
-- **`controller.getUsername`**
-  - **params**: `{ nonce, origin }`
-  - **result**: `string | null`
-- **`controller.openProfile`**
-  - **params**: `{ nonce, origin }`
-  - **result**: `{ ok: true, url?: string }`
-- **`controller.clearCache`**
-  - **params**: `{ nonce, origin }`
-  - **result**: `{ ok: true }`
-  - **description**: Clears cached session data and regenerates session keys. Use this if the controller page is not loading correctly.
-- **`starknet.execute`**
-  - **params**: `{ nonce, origin, calls: Array<{ contractAddress, entrypoint, calldata }> }`
-  - **result**: `{ transaction_hash: string }`
+```javascript
+// In the web client console (when running in native shell)
+window.NativeBridge.request('echo', { test: 'hello' })
+  .then(result => console.log('Echo result:', result));
+```
 
-### Testing (manual)
+### Development with Local Web Client
 
-- Start the native shell and confirm the WebView loads your web URL.
-- In the web app, tap **Log In** (native shell only): it should open the Cartridge session flow and return to the app.
-- Trigger any on-chain action that calls `account.execute(...)` in the web client; it should route to `starknet.execute`.
+To test with a local web client instance:
 
-### Troubleshooting
+1. Start the web client locally:
+   ```bash
+   cd ../../client
+   pnpm dev
+   ```
 
-#### Controller page not loading correctly
+2. Update `.env` to point to localhost:
+   ```bash
+   EXPO_PUBLIC_NATIVE_WEB_URL=http://localhost:5173
+   EXPO_PUBLIC_ALLOWED_ORIGINS=http://localhost:5173
+   ```
 
-If the controller authentication page is not loading or showing stale data:
+3. Restart the Expo app
 
-1. **Using ASWebAuthenticationSession** - We use `openAuthSessionAsync` instead of `openBrowserAsync` to avoid iOS simulator BrowserEngineKit crashes
-2. **Cache is disabled by default** - The WebView has `cacheEnabled={false}` to prevent stale controller page data
-3. **Session data is cleared on logout** - Logging out now clears all cached session keys
-4. **Manual cache clear** - You can call `controller.clearCache()` from the web app to force clear all session data
+**Note:** Web Workers may not work reliably with `file://` URLs. For production, always use HTTPS URLs.
 
-#### Blank authentication page (BrowserEngineKit errors)
+## Building for Production
 
-**Root Cause:** iOS simulator 18+ has a known bug where Safari popup view controllers (including `SFSafariViewController` and `ASWebAuthenticationSession`) fail to render due to BrowserEngineKit crashes.
+### Using EAS Build (Recommended)
 
-**Solution:** The authentication page now opens in the **main WebView** instead of a popup. This works perfectly in both simulator and on real devices:
+1. **Install EAS CLI:**
 
-1. Tap login button
-2. Main WebView navigates to the Cartridge authentication page
-3. Complete authentication
-4. Page redirects back to your app
-5. Session connects automatically via WebSocket
+```bash
+npm install -g eas-cli
+```
 
-The main WebView doesn't have the BrowserEngineKit issue, so authentication works seamlessly!
+2. **Login to Expo:**
 
-To manually clear cache from the web app:
+```bash
+eas login
+```
+
+3. **Configure EAS:**
+
+```bash
+eas build:configure
+```
+
+4. **Build for iOS:**
+
+```bash
+eas build --platform ios
+```
+
+5. **Build for Android:**
+
+```bash
+eas build --platform android
+```
+
+### Local Builds (Advanced)
+
+If you need to build locally (e.g., for native modules):
+
+```bash
+# Generate native projects
+npx expo prebuild
+
+# iOS
+cd ios && pod install && cd ..
+npx expo run:ios
+
+# Android
+npx expo run:android
+```
+
+## Bridge API Reference
+
+The bridge provides a JSON-RPC-like interface for communication between the WebView and native code.
+
+### Request Format
+
 ```typescript
-// In web app code (when running in native shell)
-if (connector?.id === "native-shell") {
-  await (connector as any).clearCache();
+{
+  id: string;           // Unique request ID
+  method: string;       // Method name
+  params?: any;         // Method parameters
+  timestamp: number;    // Request timestamp
 }
 ```
 
-Or rebuild the app to clear all stored data:
-```bash
-pnpm prebuild:clean
-pnpm ios
+### Response Format
+
+```typescript
+{
+  id: string;           // Matching request ID
+  result?: any;         // Success result
+  error?: {             // Error object (if failed)
+    code: number;
+    message: string;
+    data?: any;
+  };
+  timestamp: number;    // Response timestamp
+}
 ```
 
+### Available Methods
+
+| Method | Parameters | Returns | Description |
+|--------|-----------|---------|-------------|
+| `echo` | `any` | `{ echo: any }` | Test method that echoes back params |
+| `controller.login` | none | `{ address: string, username?: string }` | Login with Cartridge Controller |
+| `controller.logout` | none | `{ success: boolean }` | Logout and clear session |
+| `controller.getAddress` | none | `{ address: string \| null }` | Get current account address |
+| `controller.getUsername` | none | `{ username: string \| null }` | Get current username |
+| `controller.openProfile` | none | `{ success: boolean }` | Open Cartridge profile (if supported) |
+| `starknet.execute` | `{ calls: Call[] }` | `{ transaction_hash: string }` | Execute transaction calls |
+| `starknet.waitForTransaction` | `{ transactionHash: string, retryInterval?: number }` | `TransactionReceipt` | Wait for transaction confirmation |
+
+### Call Structure
+
+For `starknet.execute`, each call should have:
+
+```typescript
+{
+  contractAddress: string;
+  entrypoint: string;
+  calldata: string[];
+}
+```
+
+### Error Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| -32600 | INVALID_REQUEST | Invalid request format |
+| -32601 | METHOD_NOT_FOUND | Method not allowed |
+| -32602 | INVALID_PARAMS | Invalid parameters |
+| -32603 | INTERNAL_ERROR | Internal error |
+| -32000 | UNAUTHORIZED | Unauthorized origin |
+| -32001 | NOT_CONNECTED | Not connected (login required) |
+| -32002 | USER_REJECTED | User rejected the request |
+| -32003 | TRANSACTION_FAILED | Transaction failed |
+
+## Web Client Integration
+
+The web client automatically detects when running in the native shell and routes wallet operations through the bridge.
+
+### Detection
+
+```typescript
+// In client/src/utils/nativeBridge.ts
+export function isNativeShell(): boolean {
+  return typeof window !== 'undefined' && 
+         window.__NATIVE_SHELL__ === true &&
+         typeof window.ReactNativeWebView !== 'undefined';
+}
+```
+
+### Usage in Web Client
+
+The integration is transparent - existing code continues to work:
+
+```typescript
+// In client/src/contexts/controller.tsx
+const { account, address } = useController();
+
+// account will be NativeAccountAdapter when in native shell
+// account will be regular Starknet Account when in browser
+await account.execute(calls);
+```
+
+**Important:** All changes to the web client are strictly gated behind `isNativeShell()` checks. Browser behavior is completely unchanged.
+
+## Security
+
+### Origin Validation
+
+The bridge validates all incoming messages against an allowlist of origins:
+
+```typescript
+// Configured via EXPO_PUBLIC_ALLOWED_ORIGINS
+const ALLOWED_ORIGINS = [
+  'https://lootsurvivor.io',
+  'https://staging.lootsurvivor.io'
+];
+```
+
+In development mode, `localhost` and `file://` are automatically allowed.
+
+### Method Validation
+
+Only explicitly allowed methods can be called:
+
+```typescript
+const ALLOWED_METHODS = [
+  'echo',
+  'controller.login',
+  'controller.logout',
+  'controller.getAddress',
+  'controller.getUsername',
+  'controller.openProfile',
+  'starknet.execute',
+  'starknet.waitForTransaction',
+];
+```
+
+### Request Validation
+
+Each request is validated for:
+- Correct structure (id, method, timestamp)
+- Timestamp within 5 minutes of current time
+- Method in allowlist
+- Origin in allowlist
+
+### Secure Storage
+
+Credentials are stored using Expo SecureStore, which uses:
+- iOS: Keychain Services
+- Android: EncryptedSharedPreferences (AES-256)
+
+## Cartridge Controller Integration
+
+### Current Status
+
+The app includes scaffolding for Cartridge Controller integration. The actual native SDK integration requires:
+
+1. **Native Modules:** Cartridge's native SDK may require custom native modules
+2. **Config Plugins:** Expo config plugins for native configuration
+3. **Policies:** Define transaction policies for session keys
+
+### Implementation Notes
+
+See `src/cartridge/CartridgeController.ts` for the integration interface. The `login()` method includes TODO comments indicating where the actual Cartridge SDK calls should be integrated.
+
+**Reference:** https://github.com/cartridge-gg/controller.c/tree/main/examples/react-native
+
+### Session Management
+
+Sessions are stored securely and include:
+- Account address
+- Username (if available)
+- Session expiration time
+- Session key (for transaction signing)
+
+## Troubleshooting
+
+### Web Workers Not Loading
+
+If the web client reports Web Worker errors:
+
+1. Ensure you're using an HTTPS URL (not `file://`)
+2. Check that the web server sends correct CORS headers
+3. Verify `allowFileAccessFromFileURLs` is enabled in WebView
+
+### Bridge Not Responding
+
+1. Check console logs in both native and WebView
+2. Verify origin is in the allowlist
+3. Test with the `echo` method first
+4. Check that `window.NativeBridge` is defined in WebView
+
+### Login Fails
+
+1. Ensure Cartridge Controller is properly initialized
+2. Check network connectivity
+3. Verify RPC URL is correct
+4. Check console for specific error messages
+
+### Build Errors
+
+If you encounter build errors:
+
+1. Clear cache: `npx expo start -c`
+2. Reinstall dependencies: `rm -rf node_modules && pnpm install`
+3. For iOS: `cd ios && pod install && cd ..`
+4. For Android: Clean build in Android Studio
+
+## Testing Checklist
+
+Before releasing, test the following flows:
+
+- [ ] App launches and loads web client
+- [ ] Native login flow works
+- [ ] Address and username are displayed correctly
+- [ ] Transaction execution works (test with a simple game action)
+- [ ] Transaction confirmation works
+- [ ] Logout clears session
+- [ ] App restart restores session (if not expired)
+- [ ] Deep links work (if configured)
+- [ ] Web Workers function correctly
+- [ ] No impact on web browser behavior
+
+## Known Limitations
+
+1. **Cartridge SDK:** Native SDK integration is scaffolded but requires actual implementation
+2. **Payments:** Apple Pay / StoreKit / Play Billing are not implemented (out of scope)
+3. **Web Workers:** May have issues with `file://` URLs - use HTTPS for production
+4. **Profile:** `openProfile` is stubbed and requires native SDK support
+
+## Contributing
+
+When making changes:
+
+1. Keep web client changes minimal and gated behind `isNativeShell()`
+2. Add security validation for new bridge methods
+3. Update this README with new methods or configuration
+4. Test on both iOS and Android
+5. Verify no impact on desktop/mobile browser behavior
+
+## License
+
+See the main repository LICENSE files.
+
+## Support
+
+For issues specific to the native shell, please check:
+1. This README
+2. Console logs (both native and WebView)
+3. Cartridge documentation: https://docs.cartridge.gg/
+4. Expo documentation: https://docs.expo.dev/

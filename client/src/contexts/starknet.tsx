@@ -14,8 +14,6 @@ import {
   useContext,
   useState
 } from "react";
-import { isNativeShell } from "@/nativeShell/isNativeShell";
-import { NativeShellConnector } from "@/nativeShell/NativeShellConnector";
 
 interface DynamicConnectorContext {
   setCurrentNetworkConfig: (network: NetworkConfig) => void;
@@ -40,14 +38,6 @@ const cartridgeController =
     })
     : null;
 
-const nativeShellConnector =
-  typeof window !== "undefined" && isNativeShell()
-    ? new NativeShellConnector({
-        rpcUrl: controllerConfig.rpcUrl,
-        policies: controllerConfig.policies,
-      })
-    : null;
-
 export function DynamicConnectorProvider({ children }: PropsWithChildren) {
   const [currentNetworkConfig, setCurrentNetworkConfig] =
     useState<NetworkConfig>(getNetworkConfig(ChainId.SN_MAIN));
@@ -66,10 +56,7 @@ export function DynamicConnectorProvider({ children }: PropsWithChildren) {
       <StarknetConfig
         chains={[mainnet]}
         provider={jsonRpcProvider({ rpc })}
-        connectors={[
-          ...(nativeShellConnector ? [nativeShellConnector as any] : []),
-          ...(nativeShellConnector ? [] : [cartridgeController as any]),
-        ]}
+        connectors={[cartridgeController as any]}
         explorer={voyager}
         autoConnect={true}
       >
