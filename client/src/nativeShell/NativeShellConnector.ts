@@ -67,6 +67,9 @@ export class NativeShellConnector {
   }
 
   async connect(_opts?: any) {
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'NativeShellConnector.ts:69',message:'NativeShellConnector.connect called',data:{loginParams:this.loginParams,hasPolicies:!!this.loginParams.policies,policiesCount:Array.isArray(this.loginParams.policies)?this.loginParams.policies.length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+    // #endregion
     await nativeShellRpcRequest("controller.login", this.loginParams);
     const address = await nativeShellRpcRequest<string | null>("controller.getAddress", {});
     if (!address) throw new Error("Native shell login did not return an address");

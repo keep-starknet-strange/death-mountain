@@ -28,6 +28,8 @@ export default function NativeShellScreen() {
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
   const [webViewKey, setWebViewKey] = useState(0);
   const [targetUrl, setTargetUrl] = useState<string | null>(null);
+  const [returnUrl, setReturnUrl] = useState<string | null>(null);
+  const targetUrlRef = useRef<string | null>(null);
   const insets = useSafeAreaInsets();
 
   let webUrl: string | null = null;
@@ -59,7 +61,7 @@ export default function NativeShellScreen() {
     );
   }
   const nonce = useMemo(() => createNonce(), []);
-  const webviewRef = useRef<WebView & { loadRequest?: (req: { uri: string }) => void }>(null);
+  const webviewRef = useRef<WebView>(null);
 
   const session = useControllerSession();
   
@@ -159,11 +161,19 @@ export default function NativeShellScreen() {
 
   const handleMessage = async (event: WebViewMessageEvent) => {
     let req: RpcRequest | null = null;
+    let message: any = null;
     try {
-      req = JSON.parse(event.nativeEvent.data) as RpcRequest;
+      const data = JSON.parse(event.nativeEvent.data);
+      // Check if it's an RPC request
+      if (data.jsonrpc === "2.0" && typeof data.id === "string") {
+        req = data as RpcRequest;
+      } else {
+        return;
+      }
     } catch {
       return;
     }
+
 
     if (!req || req.jsonrpc !== "2.0" || typeof req.id !== "string") {
       return;
@@ -199,45 +209,19 @@ export default function NativeShellScreen() {
           console.log("[NativeShell] Login params:", JSON.stringify(loginParams));
           
           try {
+            // Save the current URL to return to after authentication
+            const savedReturnUrl = currentUrl || webUrl;
+            setReturnUrl(savedReturnUrl);
+            
+            // Build session URL
             const sessionUrl = session.buildSessionUrl(loginParams);
             console.log("[NativeShell] 🔗 Built session URL:", sessionUrl);
+            console.log("[NativeShell] Will return to:", savedReturnUrl);
             
-            // Navigate the main WebView to the Cartridge auth page
-            console.log("[NativeShell] 📱 Navigating WebView to Cartridge auth page...");
-            
-            // Navigate the main WebView to the session URL by updating state
-            // This will cause the WebView to re-render with the new URL
-            console.log("[NativeShell] 🚀 Navigating WebView to session URL");
-            console.log("[NativeShell] Session URL:", sessionUrl);
-            console.log("[NativeShell] Current URL:", currentUrl);
-            
-            // Save the current URL to return to after authentication
-            const returnUrl = currentUrl || webUrl;
-            
-            // Update the target URL and force WebView to reload with new URL
-            setTargetUrl(sessionUrl);
-            setWebViewKey(prev => prev + 1);
-            
-            console.log("[NativeShell] ✅ WebView URL updated, forcing re-render");
-            
-            // After authentication completes (session subscription resolves),
-            // navigate back to the original URL
-            // The session.login() promise resolves after 30 seconds or when credentials are received
-            setTimeout(() => {
-              console.log("[NativeShell] ↩️  Returning to original URL:", returnUrl);
-              setTargetUrl(null); // This will make it use webUrl again
-              setWebViewKey(prev => prev + 1);
-            }, 32000); // Slightly longer than the 30s session subscription timeout
-            
-            if (!webviewRef.current) {
-              console.error("[NativeShell] ❌ WebView ref is null!");
-            }
-            
-            // Start the session subscription in the background
-            console.log("[NativeShell] Starting session subscription...");
+            // Step 1: Start subscription BEFORE opening browser (single attempt)
+            console.log("[NativeShell] 🚀 Starting session subscription (before browser)...");
             session.login(loginParams).then(result => {
-              console.log("[NativeShell] ✅ Session login completed:", result);
-              postToWeb({ jsonrpc: "2.0", id: req.id, result });
+              console.log("[NativeShell] ✅ Session subscription started:", result);
             }).catch(err => {
               console.error("[NativeShell] ❌ Session login failed:", err);
               postToWeb({ 
@@ -245,7 +229,63 @@ export default function NativeShellScreen() {
                 id: req.id, 
                 error: createRpcError(-32001, err?.message ?? "Login failed") 
               });
+              return;
             });
+            
+            // Step 2: Navigate to Cartridge auth page
+            console.log("[NativeShell] 📱 Navigating WebView to Cartridge auth page...");
+            setTargetUrl(sessionUrl);
+            targetUrlRef.current = sessionUrl;
+            setWebViewKey(prev => prev + 1);
+            
+            // Step 3: Simple polling - auto-dismiss when session is ready
+            console.log("[NativeShell] 🔍 Polling for session readiness (auto-dismiss on success)...");
+            // #region agent log
+            fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:293',message:'Polling started',data:{savedReturnUrl,targetUrl:sessionUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'H'})}).catch(()=>{});
+            // #endregion
+            let checkCount = 0;
+            const maxChecks = 60; // Check for up to 60 seconds
+            const pollInterval = setInterval(() => {
+              checkCount++;
+              const address = session.getAddress();
+              
+              // #region agent log
+              fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:302',message:'Poll check',data:{checkCount,maxChecks,address:address||null,hasAddress:!!address},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'H'})}).catch(()=>{});
+              // #endregion
+              
+              if (address) {
+                // Session ready - auto-dismiss
+                console.log("[NativeShell] ✅ Session ready, auto-dismissing:", address);
+                // #region agent log
+                fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:310',message:'Auto-dismissing on success',data:{address,checkCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'H'})}).catch(()=>{});
+                // #endregion
+                
+                clearInterval(pollInterval);
+                
+                // Navigate back
+                setTargetUrl(null);
+                setReturnUrl(null);
+                targetUrlRef.current = null;
+                setWebViewKey(prev => prev + 1);
+                
+                // Trigger account refresh
+                setTimeout(() => {
+                  webviewRef.current?.injectJavaScript(`
+                    window.dispatchEvent(new Event('focus'));
+                    window.dispatchEvent(new Event('visibilitychange'));
+                    window.dispatchEvent(new CustomEvent('nativeShellAccountReady'));
+                    true;
+                  `);
+                }, 300);
+                
+                postToWeb({ jsonrpc: "2.0", id: req.id, result: { ok: true } });
+              } else if (checkCount >= maxChecks) {
+                console.log("[NativeShell] ⏰ Max checks reached");
+                clearInterval(pollInterval);
+                postToWeb({ jsonrpc: "2.0", id: req.id, result: { ok: true } });
+              }
+            }, 1000);
+            
           } catch (error) {
             console.error("[NativeShell] ❌ Error in login handler:", error);
             postToWeb({ 
@@ -323,6 +363,9 @@ export default function NativeShellScreen() {
   // Use targetUrl if set (for navigation), otherwise use webUrl
   const activeUrl = targetUrl || webUrl;
   console.log("[NativeShell] Rendering WebView with URL:", activeUrl);
+  // #region agent log
+  fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:399',message:'WebView activeUrl computed',data:{activeUrl,targetUrl,webUrl,returnUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
   
   return (
     <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: "black" }}>
@@ -348,11 +391,17 @@ export default function NativeShellScreen() {
         onLoadStart={(syntheticEvent) => {
           const { nativeEvent } = syntheticEvent;
           console.log("[WebView] Load started:", nativeEvent.url);
+          // #region agent log
+          fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:348',message:'WebView load started',data:{url:nativeEvent.url,targetUrl,returnUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'N'})}).catch(()=>{});
+          // #endregion
           setWebError(null);
         }}
         onLoad={(syntheticEvent) => {
           const { nativeEvent } = syntheticEvent;
           console.log("[WebView] Load complete:", nativeEvent.url);
+          // #region agent log
+          fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:424',message:'WebView load complete',data:{url:nativeEvent.url,targetUrl,returnUrl,isCartridgeUrl:nativeEvent.url.includes('cartridge.gg')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'O'})}).catch(()=>{});
+          // #endregion
           setWebError(null);
         }}
         onLoadEnd={(syntheticEvent) => {
@@ -369,7 +418,14 @@ export default function NativeShellScreen() {
           return ok;
         }}
         onNavigationStateChange={(nav) => {
-          setCurrentUrl(nav.url);
+          // Simply track the current URL for reference
+          // Navigation back to game is handled by polling in the login handler
+          const newUrl = nav.url;
+          setCurrentUrl(newUrl);
+          console.log("[NativeShell] 🔍 Navigation changed:", newUrl);
+          // #region agent log
+          fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:425',message:'Navigation state changed',data:{newUrl,loading:nav.loading,canGoBack:nav.canGoBack,targetUrl,returnUrl,activeUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
         }}
         onOpenWindow={(e) => {
           // iOS: target=_blank / window.open often ends up here. Force it into the same WebView.
@@ -405,9 +461,9 @@ export default function NativeShellScreen() {
           console.log("[WebView] HTTP Error:", e.nativeEvent.statusCode, e.nativeEvent.url);
           setWebError(`HTTP ${e.nativeEvent.statusCode} loading ${e.nativeEvent.url}`);
         }}
-        onConsoleMessage={(event) => {
+        {...({ onConsoleMessage: (event: { nativeEvent: { message: string } }) => {
           console.log("[WebView Console]", event.nativeEvent.message);
-        }}
+        } } as any)}
         javaScriptEnabled
         domStorageEnabled
         // Workers need a real origin; we intentionally load HTTPS, not file://.

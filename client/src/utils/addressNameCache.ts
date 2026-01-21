@@ -1,5 +1,3 @@
-import { lookupAddresses } from '@cartridge/controller';
-
 const CACHE_KEY = 'addressNameCache';
 
 // Maximum cache size (number of addresses to store)
@@ -62,10 +60,24 @@ export async function lookupAddressName(address: string): Promise<string | null>
     return cache[normalized];
   }
 
-  // Not in cache, fetch from API
+  // Not in cache, fetch from Cartridge API directly
   try {
-    const addressMap = await lookupAddresses([normalized]);
-    const name = addressMap.get(normalized) || null;
+    const response = await fetch(`https://api.cartridge.gg/v1/addresses?addresses=${encodeURIComponent(normalized)}`);
+    if (!response.ok) {
+      throw new Error(`Address lookup failed: ${response.statusText}`);
+    }
+    const data = await response.json();
+    
+    // Handle both array and object response formats
+    let name: string | null = null;
+    if (Array.isArray(data)) {
+      const item = data.find((item: any) => item.address?.toLowerCase() === normalized);
+      name = item?.name || null;
+    } else if (data[normalized]) {
+      name = data[normalized];
+    } else if (data.address === normalized || data.address?.toLowerCase() === normalized) {
+      name = data.name || null;
+    }
 
     // Update cache
     cache[normalized] = name;
@@ -74,6 +86,9 @@ export async function lookupAddressName(address: string): Promise<string | null>
     return name;
   } catch (error) {
     console.error('Error looking up address name:', error);
+    // Cache null result to avoid repeated failed lookups
+    cache[normalized] = null;
+    saveCache(cache);
     return null;
   }
 }

@@ -1,6 +1,8 @@
 ## Death Mountain Native Shell (Expo)
 
-This is a **third client**: a native iOS/Android shell that loads the existing web client in a `WebView` and provides **native Cartridge Controller login + signing** via a hardened JSON-RPC bridge.
+This is the **primary client** for Death Mountain: a native iOS/Android shell that loads the web client in a `WebView` and provides **native Cartridge Controller login + signing** via a hardened JSON-RPC bridge.
+
+**Important**: The web client is designed to run exclusively within this native shell. It uses the native `controller.c` implementation for all authentication and transaction signing operations. Standalone browser access is not supported.
 
 ### What this stage includes
 
@@ -13,8 +15,17 @@ This is a **third client**: a native iOS/Android shell that loads the existing w
   - `controller.getUsername`
   - `controller.openProfile` (best-effort fallback: opens `x.cartridge.gg`)
   - `controller.clearCache` (clears cached session data)
+  - `controller.openInWebView` (navigates WebView to a URL)
   - `starknet.execute(calls)`
   - `starknet.waitForTransaction` (stub for now)
+
+### Architecture
+
+The native shell uses Cartridge's `controller.c` Rust-based native module for all controller operations. The web client communicates with the native shell via a JSON-RPC bridge. This provides:
+
+- **Native performance**: All authentication and signing operations use native Rust code
+- **Secure storage**: Session keys stored in native secure storage (Expo SecureStore)
+- **Consistent UX**: Single implementation ensures consistent behavior across platforms
 
 ### Prereqs
 
@@ -40,7 +51,7 @@ The native shell loads the web client from:
 Example:
 
 ```bash
-export EXPO_PUBLIC_NATIVE_WEB_URL="https://your-staging.example.com/"
+export EXPO_PUBLIC_NATIVE_WEB_URL="http://localhost:5173/"
 ```
 
 #### 2) Sync Cartridge native module assets (required)
@@ -113,6 +124,10 @@ All messages are JSON strings exchanged via `WebView.postMessage`.
   - **params**: `{ nonce, origin }`
   - **result**: `{ ok: true }`
   - **description**: Clears cached session data and regenerates session keys. Use this if the controller page is not loading correctly.
+- **`controller.openInWebView`**
+  - **params**: `{ nonce, origin, url: string }`
+  - **result**: `{ ok: true }`
+  - **description**: Navigates the main WebView to the specified URL. Used for opening Cartridge pages like starter packs.
 - **`starknet.execute`**
   - **params**: `{ nonce, origin, calls: Array<{ contractAddress, entrypoint, calldata }> }`
   - **result**: `{ transaction_hash: string }`

@@ -10,6 +10,7 @@ import {
   DynamicConnectorProvider,
   useDynamicConnector,
 } from "@/contexts/starknet.tsx";
+import { CartridgeControllerProvider } from "@/contexts/cartridgeController.tsx";
 import { createDojoConfig } from "@dojoengine/core";
 import { useEffect, useState } from "react";
 import { Analytics } from "@vercel/analytics/react";
@@ -71,8 +72,10 @@ async function main() {
       options={options}
     >
       <DynamicConnectorProvider>
-        <Analytics />
-        <DojoApp />
+        <CartridgeControllerProvider>
+          <Analytics />
+          <DojoApp />
+        </CartridgeControllerProvider>
       </DynamicConnectorProvider>
     </PostHogProvider>
   );

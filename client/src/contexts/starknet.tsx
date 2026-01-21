@@ -3,8 +3,6 @@ import {
   getNetworkConfig,
   NetworkConfig,
 } from "@/utils/networkConfig";
-import { stringToFelt } from "@/utils/utils";
-import ControllerConnector from "@cartridge/connector/controller";
 import { mainnet } from "@starknet-react/chains";
 import { jsonRpcProvider, StarknetConfig, voyager } from "@starknet-react/core";
 import {
@@ -27,18 +25,6 @@ const DynamicConnectorContext = createContext<DynamicConnectorContext | null>(
 );
 
 const controllerConfig = getNetworkConfig(ChainId.SN_MAIN);
-const cartridgeController =
-  typeof window !== "undefined"
-    ? new ControllerConnector({
-      policies: controllerConfig.policies,
-      namespace: controllerConfig.namespace,
-      slot: controllerConfig.slot,
-      preset: controllerConfig.preset,
-      chains: controllerConfig.chains,
-      defaultChainId: stringToFelt(controllerConfig.chainId).toString(),
-      tokens: controllerConfig.tokens,
-    })
-    : null;
 
 const nativeShellConnector =
   typeof window !== "undefined" && isNativeShell()
@@ -47,6 +33,14 @@ const nativeShellConnector =
         policies: controllerConfig.policies,
       })
     : null;
+// #region agent log
+typeof window !== "undefined" && isNativeShell() && fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'starknet.tsx:34',message:'NativeShellConnector created with policies',data:{hasPolicies:!!controllerConfig.policies,policiesCount:controllerConfig.policies?.length??0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+// #endregion
+
+// Error handling: warn if native shell connector is not available
+if (!nativeShellConnector && typeof window !== "undefined") {
+  console.error("Native shell connector not available. App requires native shell.");
+}
 
 export function DynamicConnectorProvider({ children }: PropsWithChildren) {
   const [currentNetworkConfig, setCurrentNetworkConfig] =
@@ -68,7 +62,6 @@ export function DynamicConnectorProvider({ children }: PropsWithChildren) {
         provider={jsonRpcProvider({ rpc })}
         connectors={[
           ...(nativeShellConnector ? [nativeShellConnector as any] : []),
-          ...(nativeShellConnector ? [] : [cartridgeController as any]),
         ]}
         explorer={voyager}
         autoConnect={true}

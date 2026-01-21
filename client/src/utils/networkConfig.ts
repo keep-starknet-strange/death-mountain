@@ -1,5 +1,6 @@
 import manifest_mainnet from "../../manifest_mainnet.json";
 import manifest_slot from "../../manifest_slot.json";
+import { getContractByName } from "@dojoengine/core";
 
 export interface NetworkConfig {
   chainId: ChainId;
@@ -128,11 +129,115 @@ export const NETWORKS = {
   },
 };
 
+function buildSessionPolicies(
+  manifest: any,
+  namespace: string,
+  dungeonAddress?: string,
+  ticketAddress?: string,
+  beastsAddress?: string,
+  vrfProviderAddress?: string
+): Array<{ target: string; method: string }> {
+  const policies: Array<{ target: string; method: string }> = [];
+
+  // Get contract addresses from manifest
+  const gameSystems = getContractByName(manifest, namespace, "game_systems");
+  const settingsSystems = getContractByName(manifest, namespace, "settings_systems");
+
+  // Game systems policies
+  if (gameSystems?.address) {
+    const gameEntrypoints = [
+      "start_game",
+      "explore",
+      "attack",
+      "flee",
+      "equip",
+      "drop",
+      "buy_items",
+      "select_stat_upgrades",
+    ];
+    gameEntrypoints.forEach((entrypoint) => {
+      policies.push({
+        target: gameSystems.address,
+        method: entrypoint,
+      });
+    });
+  }
+
+  // Settings systems policies
+  if (settingsSystems?.address) {
+    policies.push({
+      target: settingsSystems.address,
+      method: "add_settings",
+    });
+  }
+
+  // Dungeon contract policies (for survivor dungeon)
+  if (dungeonAddress) {
+    const dungeonEntrypoints = [
+      "buy_game",
+      "claim_beast",
+      "claim_reward_token",
+      "claim_jackpot",
+    ];
+    dungeonEntrypoints.forEach((entrypoint) => {
+      policies.push({
+        target: dungeonAddress,
+        method: entrypoint,
+      });
+    });
+  }
+
+  // Ticket contract policies (for ERC20 approve)
+  if (ticketAddress) {
+    policies.push({
+      target: ticketAddress,
+      method: "approve",
+    });
+  }
+
+  // Beasts contract policies
+  if (beastsAddress) {
+    policies.push({
+      target: beastsAddress,
+      method: "refresh_dungeon_stats",
+    });
+  }
+
+  // VRF provider policies (if available)
+  if (vrfProviderAddress) {
+    policies.push({
+      target: vrfProviderAddress,
+      method: "request_random",
+    });
+  }
+
+  return policies;
+}
+
 export function getNetworkConfig(networkKey: ChainId): NetworkConfig {
   const network = NETWORKS[networkKey as keyof typeof NETWORKS];
   if (!network) throw new Error(`Network ${networkKey} not found`);
 
-  const policies = undefined;
+  // Build session policies for SN_MAIN network
+  let policies: Array<{ target: string; method: string }> | undefined = undefined;
+  
+  if (networkKey === ChainId.SN_MAIN) {
+    // For mainnet, use the survivor dungeon address and ticket
+    const dungeonAddress = "0x00a67ef20b61a9846e1c82b411175e6ab167ea9f8632bd6c2091823c3629ec42";
+    const ticketAddress = "0x0452810188C4Cb3AEbD63711a3b445755BC0D6C4f27B923fDd99B1A118858136";
+    const vrfProviderAddress = typeof window !== "undefined" 
+      ? import.meta.env.VITE_PUBLIC_VRF_PROVIDER_ADDRESS 
+      : undefined;
+    
+    policies = buildSessionPolicies(
+      network.manifest,
+      network.namespace,
+      dungeonAddress,
+      ticketAddress,
+      network.beasts,
+      vrfProviderAddress
+    );
+  }
 
   return {
     chainId: network.chainId,

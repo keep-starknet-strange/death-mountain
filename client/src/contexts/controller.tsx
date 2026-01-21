@@ -21,6 +21,12 @@ import { useDynamicConnector } from "./starknet";
 import { delay } from "@/utils/utils";
 import { useDungeon } from "@/dojo/useDungeon";
 import { isNativeShell } from "@/nativeShell/isNativeShell";
+import { nativeShellRpcRequest } from "@/nativeShell/rpc";
+import {
+  useCartridgeAccount,
+  useCartridgeConnect,
+  useCartridgeController,
+} from "./cartridgeController";
 
 export interface ControllerContext {
   account: any;
@@ -67,15 +73,33 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
   const { identifyAddress } = useAnalytics();
   const nativeShell = isNativeShell();
 
+  // Cartridge Controller hooks (for web with Cartridge, not native shell)
+  // Always call hooks (React requirement), but only use them when not native and not burner
+  const useCartridge = !nativeShell && currentNetworkConfig.chainId !== ChainId.WP_PG_SLOT;
+  
+  // Always call hooks (React rules) - they return safe defaults if provider not available
+  const cartridgeAccountData = useCartridgeAccount();
+  const cartridgeConnectData = useCartridgeConnect();
+  const cartridgeControllerData = useCartridgeController();
+
+  // Only use Cartridge data when appropriate
+  const cartridgeAccount = useCartridge && cartridgeAccountData.isConnected ? cartridgeAccountData : null;
+  const cartridgeConnect = useCartridge ? cartridgeConnectData : null;
+  const cartridgeController = useCartridge && cartridgeControllerData ? cartridgeControllerData : null;
+
   const demoRpcProvider = useMemo(
     () => new RpcProvider({ nodeUrl: NETWORKS.WP_PG_SLOT.rpcUrl }),
     []
   );
 
   useEffect(() => {
-    if (account) {
+    // Use Cartridge account if available, otherwise use Starknet account
+    const activeAccount = cartridgeAccount?.account || account;
+    const activeAddress = cartridgeAccount?.address || address;
+
+    if (activeAccount && activeAddress) {
       fetchTokenBalances();
-      identifyAddress({ address: account.address });
+      identifyAddress({ address: activeAddress });
 
       // Check if terms have been accepted
       const termsAccepted = typeof window !== 'undefined'
@@ -86,7 +110,7 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
         setShowTermsOfService(true);
       }
     }
-  }, [account]);
+  }, [account, address, cartridgeAccount]);
 
   useEffect(() => {
     if (
@@ -106,23 +130,141 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
     }
   }, []);
 
-  // Get username when connector changes
+  // Get username from Cartridge Controller or connector
   useEffect(() => {
-    const getUsername = async () => {
+    if (useCartridge && cartridgeController?.username) {
+      setUserName(cartridgeController.username);
+    } else {
+      const getUsername = async () => {
+        try {
+          const name = await (connector as any)?.username();
+          if (name) setUserName(name);
+        } catch (error) {
+          console.error("Error getting username:", error);
+        }
+      };
+
+      if (connector) getUsername();
+    }
+  }, [connector, useCartridge, cartridgeController?.username]);
+
+  // Listen for native shell account ready event and re-check account
+  useEffect(() => {
+    if (!nativeShell) return;
+
+    const handleAccountReady = async () => {
+      console.log("[Controller] Native shell account ready event received");
+      // #region agent log
+      fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'controller.tsx:155',message:'Account ready event received',data:{currentAddress:address,hasAddress:!!address},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'G'})}).catch(()=>{});
+      // #endregion
+      
+      const nativeShellConnector = connectors.find((conn) => conn.id === "native-shell");
+      if (!nativeShellConnector) {
+        console.warn("[Controller] Native shell connector not found");
+        return;
+      }
+
       try {
-        const name = await (connector as any)?.username();
-        if (name) setUserName(name);
+        // Check if account is available - retry a few times if not ready yet
+        let account = null;
+        let retries = 0;
+        const maxRetries = 5;
+        
+        while (!account && retries < maxRetries) {
+          try {
+            account = await (nativeShellConnector as any).account();
+            if (!account) {
+              retries++;
+              if (retries < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+            }
+          } catch (err) {
+            retries++;
+            if (retries < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
+        }
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'controller.tsx:175',message:'Account check result',data:{hasAccount:!!account,retries,address:account?.address||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'G'})}).catch(()=>{});
+        // #endregion
+        
+        if (!account) {
+          console.log("[Controller] No account available yet after retries, will check again later");
+          // Set up a retry mechanism - check again in a few seconds
+          setTimeout(() => {
+            const checkAgain = async () => {
+              try {
+                const retryAccount = await (nativeShellConnector as any).account();
+                if (retryAccount && !address) {
+                  console.log("[Controller] Account now available, connecting...");
+                  await connect({ connector: nativeShellConnector });
+                  const retryUsername = await (nativeShellConnector as any).username();
+                  if (retryUsername) setUserName(retryUsername);
+                }
+              } catch (err) {
+                console.error("[Controller] Retry check failed:", err);
+              }
+            };
+            checkAgain();
+          }, 3000);
+          return;
+        }
+
+        // If not connected, connect now
+        if (!address) {
+          console.log("[Controller] Account available but not connected, connecting...");
+          // #region agent log
+          fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'controller.tsx:195',message:'Connecting account',data:{accountAddress:account.address},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'G'})}).catch(()=>{});
+          // #endregion
+          await connect({ connector: nativeShellConnector });
+        }
+
+        // Fetch username after connection (or if already connected)
+        // This ensures the username is displayed even if we were already connected
+        try {
+          const username = await (nativeShellConnector as any).username();
+          // #region agent log
+          fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'controller.tsx:204',message:'Username fetched',data:{username:username||null,hasUsername:!!username},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'G'})}).catch(()=>{});
+          // #endregion
+          if (username) {
+            console.log("[Controller] Fetched username:", username);
+            setUserName(username);
+          }
+        } catch (usernameError) {
+          console.warn("[Controller] Could not fetch username:", usernameError);
+        }
+
+        // Force a refresh of token balances and other account-dependent data
+        // This ensures the UI is fully updated
+        setTimeout(() => {
+          console.log("[Controller] Refreshing account data after connection");
+          fetchTokenBalances();
+        }, 500);
       } catch (error) {
-        console.error("Error getting username:", error);
+        console.error("[Controller] Error handling account ready:", error);
+        // #region agent log
+        fetch('http://127.0.0.1:7245/ingest/dbb5642d-cb63-4348-b628-e32d2a4b7cdb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'controller.tsx:217',message:'Account ready handler error',data:{error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'G'})}).catch(()=>{});
+        // #endregion
       }
     };
 
-    if (connector) getUsername();
-  }, [connector]);
+    window.addEventListener('nativeShellAccountReady', handleAccountReady);
+    return () => {
+      window.removeEventListener('nativeShellAccountReady', handleAccountReady);
+    };
+  }, [nativeShell, connectors, connect, address]);
 
   const enterDungeon = async (payment: Payment, txs: any[]) => {
+    // Use the active account (Cartridge or native shell or burner)
+    const accountToUse = currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
+      ? burner
+      : (cartridgeAccount?.account || account);
+    
     let gameId = await buyGame(
-      account,
+      accountToUse,
       payment,
       userName || "Adventurer",
       txs,
@@ -147,8 +289,13 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
   const bulkMintGames = async (amount: number, callback: () => void) => {
     amount = Math.min(amount, 50);
 
+    // Use the active account (Cartridge or native shell or burner)
+    const accountToUse = currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
+      ? burner
+      : (cartridgeAccount?.account || account);
+
     await buyGame(
-      account,
+      accountToUse,
       { paymentType: "Ticket" },
       userName || "Adventurer",
       [],
@@ -173,12 +320,23 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
     setCreatingBurner(false);
   };
 
+  // Determine which account/address to use
+  const activeAccount = currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
+    ? burner
+    : (cartridgeAccount?.account || account);
+  
+  const activeAddress = currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
+    ? burner?.address
+    : (cartridgeAccount?.address || address);
+
   async function fetchTokenBalances() {
     let balances = await getTokenBalances(NETWORKS.SN_MAIN.paymentTokens);
     setTokenBalances(balances);
 
+    if (!activeAddress) return;
+
     let goldenTokenAddress = NETWORKS.SN_MAIN.goldenToken;
-    const allTokens = await getGameTokens(address!, goldenTokenAddress);
+    const allTokens = await getGameTokens(activeAddress, goldenTokenAddress);
 
     if (allTokens.length > 0) {
       const cooldowns = await goldenPassReady(goldenTokenAddress, allTokens);
@@ -193,34 +351,75 @@ export const ControllerProvider = ({ children }: PropsWithChildren) => {
   return (
     <ControllerContext.Provider
       value={{
-        account:
-          currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
-            ? burner
-            : account,
-        address:
-          currentNetworkConfig.chainId === ChainId.WP_PG_SLOT
-            ? burner?.address
-            : address,
+        account: activeAccount,
+        address: activeAddress,
         playerName: userName || "Adventurer",
-        isPending: isConnecting || isPending || creatingBurner,
+        isPending: isConnecting || isPending || creatingBurner || (cartridgeConnect?.isPending || false),
         tokenBalances,
         goldenPassIds,
         showTermsOfService,
         acceptTermsOfService,
 
-        openProfile: () =>
-          nativeShell
-            ? (connector as any)?.openProfile?.()
-            : (connector as any)?.controller?.openProfile(),
-        openBuyTicket: () =>
-          (connector as any)?.controller?.openStarterPack?.("ls2-dungeon-ticket-mainnet"),
-        login: () =>
-          connect({
-            connector: connectors.find((conn) =>
-              conn.id === (nativeShell ? "native-shell" : "controller")
-            ),
-          }),
-        logout: () => disconnect(),
+        openProfile: async () => {
+          if (useCartridge && cartridgeController?.controller) {
+            try {
+              await cartridgeController.controller.openProfile();
+            } catch (error) {
+              console.error("Failed to open profile:", error);
+            }
+          } else {
+            try {
+              await (connector as any)?.openProfile?.();
+            } catch (error) {
+              console.error("Failed to open profile:", error);
+            }
+          }
+        },
+        openBuyTicket: async () => {
+          const packId = "ls2-dungeon-ticket-mainnet";
+          const url = `https://x.cartridge.gg/starter-pack/${packId}`;
+          
+          if (nativeShell) {
+            try {
+              // In native shell, use the bridge to open in WebView
+              await nativeShellRpcRequest("controller.openInWebView", { url });
+            } catch (error) {
+              console.error("Failed to open buy ticket page:", error);
+            }
+          } else if (useCartridge && cartridgeController?.controller) {
+            // Use Cartridge controller's openStarterPack if available
+            try {
+              await cartridgeController.controller.openStarterPack(packId);
+            } catch (error) {
+              // Fallback to opening URL
+              console.warn("openStarterPack not available, opening URL:", error);
+              window.open(url, '_blank');
+            }
+          } else {
+            // Fallback: open in new window
+            window.open(url, '_blank');
+          }
+        },
+        login: () => {
+          if (nativeShell) {
+            const nativeShellConnector = connectors.find((conn) => conn.id === "native-shell");
+            if (!nativeShellConnector) {
+              throw new Error("Native shell connector not available. Please use the native app.");
+            }
+            return connect({ connector: nativeShellConnector });
+          } else if (useCartridge && cartridgeConnect) {
+            return cartridgeConnect.connect();
+          } else {
+            throw new Error("No available connector");
+          }
+        },
+        logout: () => {
+          if (useCartridge && cartridgeConnect) {
+            return cartridgeConnect.disconnect();
+          } else {
+            return disconnect();
+          }
+        },
         enterDungeon,
         bulkMintGames,
       }}

@@ -78,9 +78,12 @@ sozo build
 ### Development
 
 #### Frontend Development
+
+**Note**: The web client requires the native shell app to function. It cannot run standalone in a browser. See `apps/native-shell/README.md` for setup instructions.
+
 ```bash
 cd client
-pnpm dev           # Start development server (port 5173)
+pnpm dev           # Start development server (port 5173) - for native shell WebView
 pnpm build         # Build for production
 pnpm lint          # Run ESLint
 pnpm preview       # Preview production build
